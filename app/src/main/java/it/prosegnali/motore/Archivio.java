@@ -237,6 +237,51 @@ public final class Archivio {
         return st;
     }
 
+    /** Corregge un'operazione chiusa (prezzi in euro; null = invariato) e ricalcola i risultati. */
+    public Map<String, Object> modificaOperazione(String id, Double prezzoVenditaEur, String dataVendita,
+                                                  Double prezzoEur, Double quantita) {
+        synchronized (lock) {
+            List<Map<String, Object>> st = storico();
+            for (Map<String, Object> r : st) {
+                if (!id.equals(r.get("id"))) continue;
+                if (prezzoVenditaEur != null) {
+                    double c = Json.num(r.get("cambio_vendita"), 0);
+                    if (c <= 0) c = "Europa".equals(Mercati.mercatoDi(String.valueOf(r.get("titolo")))) ? 1.0
+                            : Json.num(r.get("cambio"), 1.0);
+                    r.put("prezzo_vendita_eur", arrotonda(prezzoVenditaEur, 4));
+                    r.put("prezzo_vendita", arrotonda(prezzoVenditaEur * c, 4));
+                }
+                if (dataVendita != null) r.put("data_vendita", dataVendita);
+                if (prezzoEur != null) r.put("prezzo_eur", arrotonda(prezzoEur, 4));
+                if (quantita != null) r.put("quantita", quantita);
+                double acq = Json.num(r.get("prezzo_eur"), Json.num(r.get("prezzo"), Double.NaN));
+                double ven = Json.num(r.get("prezzo_vendita_eur"), Json.num(r.get("prezzo_vendita"), Double.NaN));
+                double q = Json.num(r.get("quantita"), 0);
+                double azioni = q > 0 ? q : Json.num(r.get("importo"), 0) / acq;
+                double comm = Json.num(r.get("commissioni_eur"), 2 * commissione);
+                double lordo = azioni * (ven - acq);
+                r.put("quantita", arrotonda(azioni, 6));
+                r.put("rend_lordo_pct", arrotonda((ven / acq - 1) * 100, 2));
+                r.put("guadagno_lordo_eur", arrotonda(lordo, 2));
+                r.put("commissioni_eur", arrotonda(comm, 2));
+                r.put("netto_eur_stimato", arrotonda(lordo - comm, 2));
+                scrivi(FILE_STORICO, st);
+                return r;
+            }
+            return null;
+        }
+    }
+
+    /** Operazione chiusa piu' recente di quel titolo negli ultimi giorni (per correggerla). */
+    public Map<String, Object> ultimaVendita(String titolo, int giorni) {
+        String limite = LocalDate.now().minusDays(giorni).toString();
+        Map<String, Object> ultima = null;
+        for (Map<String, Object> r : storico())
+            if (titolo.equalsIgnoreCase(String.valueOf(r.get("titolo")))
+                    && String.valueOf(r.get("data_vendita")).compareTo(limite) >= 0) ultima = r;
+        return ultima;
+    }
+
     public boolean eliminaOperazione(String id) {
         synchronized (lock) {
             List<Map<String, Object>> st = storico();

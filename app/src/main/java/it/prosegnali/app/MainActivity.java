@@ -689,6 +689,7 @@ public class MainActivity extends Activity {
                     + q, 13, false, Ui.GRIGIO));
             s.addView(Ui.testo(this, Formato.num(acq) + " € → " + Formato.num(ven) + " € (" + Formato.pct(Json.num(r.get("rend_lordo_pct"), 0), 2)
                     + ") · " + Json.str(r.get("strategia"), ""), 13, false, Ui.TESTO));
+            s.setOnClickListener(v -> dialogoModificaOperazione(r));
             s.setOnLongClickListener(v -> {
                 dialogo("Elimina operazione").setMessage("Eliminare dallo storico l'operazione su " + tk + "?\n"
                         + "Usalo solo per correggere un errore di inserimento.")
@@ -699,7 +700,38 @@ public class MainActivity extends Activity {
             contenuto.addView(s);
         }
         contenuto.addView(Ui.testo(this, "Filtrate per data di vendita. Netto = tolte le commissioni, prima delle tasse. "
-                + "Tieni premuto su un'operazione per eliminarla.", 12, false, Ui.GRIGIO));
+                + "Tocca un'operazione per correggerne prezzo o data di vendita; tieni premuto per eliminarla.", 12, false, Ui.GRIGIO));
+    }
+
+    private void dialogoModificaOperazione(Map<String, Object> r) {
+        String tk = String.valueOf(r.get("titolo"));
+        double acq = Json.num(r.get("prezzo_eur"), Json.num(r.get("prezzo"), Double.NaN));
+        double ven = Json.num(r.get("prezzo_vendita_eur"), Json.num(r.get("prezzo_vendita"), Double.NaN));
+        double q = Json.num(r.get("quantita"), 0);
+        LinearLayout l = Ui.colonna(this);
+        l.setPadding(Ui.dp(this, 20), Ui.dp(this, 6), Ui.dp(this, 20), 0);
+        EditText prezzoV = Ui.campoNumero(this, Double.isNaN(ven) ? "" : String.format(java.util.Locale.ITALY, "%.4f", ven), "prezzo in euro");
+        EditText dataV = Ui.campoTesto(this, dataIt(String.valueOf(r.get("data_vendita"))), "GG/MM/AAAA");
+        EditText prezzoA = Ui.campoNumero(this, Double.isNaN(acq) ? "" : String.format(java.util.Locale.ITALY, "%.4f", acq), "prezzo in euro");
+        EditText azioniQ = Ui.campoNumero(this, q > 0 ? azioni(q) : "", "numero di azioni");
+        Ui.etichettato(this, l, "Prezzo di vendita in EURO", prezzoV);
+        Ui.etichettato(this, l, "Data di vendita", dataV);
+        Ui.etichettato(this, l, "Prezzo d'acquisto in EURO", prezzoA);
+        Ui.etichettato(this, l, "Numero di azioni", azioniQ);
+        dialogo("Correggi " + Mercati.nome(tk))
+                .setView(l)
+                .setPositiveButton("Salva", (d, w) -> {
+                    try {
+                        String tq = azioniQ.getText().toString().trim();
+                        n.archivio.modificaOperazione(String.valueOf(r.get("id")), Ui.numero(prezzoV.getText().toString()),
+                                leggiData(dataV.getText().toString()).toString(), Ui.numero(prezzoA.getText().toString()),
+                                tq.isEmpty() ? null : Ui.numero(tq));
+                        n.log("Operazione " + tk + " corretta.");
+                    } catch (Exception e) {
+                        Toast.makeText(this, "Non salvata: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("Annulla", null).show();
     }
 
     private void sposta(int verso) {

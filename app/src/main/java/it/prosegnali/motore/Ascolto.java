@@ -23,7 +23,7 @@ public final class Ascolto implements Runnable {
             + "/livelli - i titoli più vicini al segnale\n"
             + "/comprato TITOLO PREZZO [IMPORTO] - registra o corregge un acquisto\n"
             + "   es. /comprato AAPL 295,40 1000   oppure   /comprato ENI.MI 15,42\n"
-            + "/venduto TITOLO PREZZO - registra una vendita\n"
+            + "/venduto TITOLO PREZZO - registra una vendita (o corregge quella appena fatta)\n"
             + "/storico - ultime operazioni chiuse\n"
             + "/monitora pc  oppure  /monitora telefono - dove fare il monitoraggio\n"
             + "/ferma - ferma il monitoraggio su tutti i dispositivi\n\n"
@@ -173,13 +173,25 @@ public final class Ascolto implements Runnable {
     }
 
     private void vendita(String titolo, double prezzoEur) {
+        if (archivio.posizione(titolo.toUpperCase()) == null && !Double.isNaN(prezzoEur)) {
+            Map<String, Object> r = archivio.ultimaVendita(titolo, 3);          // correzione
+            if (r != null) {
+                r = archivio.modificaOperazione(String.valueOf(r.get("id")), prezzoEur, null, null, null);
+                tg.invia("✏️ Vendita corretta: " + Mercati.nome(String.valueOf(r.get("titolo"))) + " a "
+                        + Formato.num(prezzoEur) + " € - " + Formato.pct(Json.num(r.get("rend_lordo_pct"), 0), 2)
+                        + " (~" + Formato.euroSegno(Json.num(r.get("netto_eur_stimato"), 0)) + " netti di commissioni)");
+                return;
+            }
+        }
         try {
             Map<String, Object> rec = archivio.chiudi(titolo, prezzoEur, cambio(titolo), LocalDate.now().toString());
             if (rec == null) { tg.invia("Non trovo " + titolo.toUpperCase() + " tra le posizioni aperte."); return; }
             tg.invia("✅ Vendita registrata: " + Mercati.nome(titolo.toUpperCase()) + " a "
                     + Formato.num(Json.num(rec.get("prezzo_vendita_eur"), 0)) + " € - "
                     + Formato.pct(Json.num(rec.get("rend_lordo_pct"), 0), 2) + " (~"
-                    + Formato.euroSegno(Json.num(rec.get("netto_eur_stimato"), 0)) + " netti di commissioni)");
+                    + Formato.euroSegno(Json.num(rec.get("netto_eur_stimato"), 0)) + " netti di commissioni)\n"
+                    + "Se su Trade Republic il prezzo di vendita era diverso, scrivi: /venduto "
+                    + rec.get("titolo") + " PREZZO_IN_EURO");
         } catch (IllegalStateException e) {
             tg.invia("⚠️ Vendita non registrata: " + e.getMessage() + ". Riprova tra qualche minuto.");
         }
