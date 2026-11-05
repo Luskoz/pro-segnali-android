@@ -1,0 +1,58 @@
+name: Compila APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compila
+        id: compila
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          gradle --no-daemon assembleRelease 2>&1 | tee build.log
+
+      - name: Pubblica APK e registro nel ramo "build"
+        run: |
+          mkdir -p /tmp/esito
+          cp build.log /tmp/esito/build.log
+          if [ "${{ steps.compila.outcome }}" = "success" ]; then
+            cp app/build/outputs/apk/release/app-release.apk /tmp/esito/PRO.SEGNALI.apk
+            echo "OK" > /tmp/esito/esito.txt
+          else
+            echo "ERRORE" > /tmp/esito/esito.txt
+          fi
+          echo "commit ${GITHUB_SHA} - esecuzione ${GITHUB_RUN_NUMBER} - $(date -u +'%Y-%m-%d %H:%M UTC')" >> /tmp/esito/esito.txt
+          cd /tmp/esito
+          git init -q -b build
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" build
+
+      - name: Esito
+        if: steps.compila.outcome != 'success'
+        run: exit 1

@@ -1,0 +1,40 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'it.prosegnali.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'it.prosegnali.app'
+        minSdk 26
+        targetSdk 34
+        versionCode (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+        versionName "1.0." + (System.getenv('GITHUB_RUN_NUMBER') ?: '0')
+    }
+
+    signingConfigs {
+        firma {
+            storeFile rootProject.file('firma/prosegnali.jks')
+            storePassword 'prosegnali'
+            keyAlias 'prosegnali'
+            keyPassword 'prosegnali'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.firma
+        }
+        debug {
+            signingConfig signingConfigs.firma
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
