@@ -10,7 +10,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Bot Telegram: avvisi (con pulsanti, link alla scheda del titolo, ISIN da copiare) e canale. */
-public final class Telegram {
+public class Telegram {
     public final String token, chat;
     private final String url;
     private static Pattern regexTitoli;

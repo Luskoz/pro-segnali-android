@@ -124,11 +124,13 @@ public final class Serie {
         for (int i = 0; i < n; i++) {
             List<Object> r = new ArrayList<>();
             r.add(date[i].toString());
-            r.add(o[i]); r.add(h[i]); r.add(l[i]); r.add(c[i]); r.add(v[i]);
+            r.add(tondo(o[i])); r.add(tondo(h[i])); r.add(tondo(l[i])); r.add(tondo(c[i])); r.add((double) Math.round(v[i]));
             righe.add(r);
         }
         return righe;
     }
+
+    private static double tondo(double x) { return Math.round(x * 10000) / 10000.0; }
 
     @SuppressWarnings("unchecked")
     public static Serie daLista(String titolo, List<Object> righe) {
