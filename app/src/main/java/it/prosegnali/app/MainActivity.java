@@ -277,6 +277,25 @@ public class MainActivity extends Activity {
         });
         rt.addView(quanti);
         m.addView(rt);
+        LinearLayout rp = Ui.riga(this);
+        rp.addView(Ui.testo(this, "🎯 Avvisami solo con punteggio ≥", 14, false, Ui.TESTO),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        String[] valori = new String[21];
+        for (int j = 0; j <= 20; j++) valori[j] = String.valueOf(j * 5);
+        Spinner soglia = new Spinner(this);
+        soglia.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, valori));
+        long attuale = Math.round(Json.num(imp.get("punteggio_minimo"), 60) / 5.0);
+        soglia.setSelection((int) Math.max(0, Math.min(20, attuale)), false);
+        soglia.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                long val = pos * 5L;
+                if (Json.num(n.impostazioni().get("punteggio_minimo"), 60) != val) n.imposta("punteggio_minimo", val);
+            }
+            public void onNothingSelected(AdapterView<?> p) {}
+        });
+        rp.addView(soglia);
+        rp.addView(Ui.testo(this, "/100", 14, false, Ui.TESTO));
+        m.addView(rp);
         contenuto.addView(m);
 
         if (!n.avvisi.isEmpty()) {

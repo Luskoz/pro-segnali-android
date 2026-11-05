@@ -48,7 +48,7 @@ public final class Monitor implements Runnable {
     public volatile Map<String, List<Analisi.Livello>> livelli = Collections.emptyMap();
     public final Map<String, Double> ultimiPrezzi = Collections.synchronizedMap(new LinkedHashMap<>());
     private volatile LocalDate giorno;
-    private Map<String, int[]> statStrategia = new LinkedHashMap<>();
+    private Map<String, Analisi.Stat> statStrategia = new LinkedHashMap<>();
     private List<String> migliori = new ArrayList<>();
     private boolean classificaCalcolata;
     private final Set<String> avvisati = Collections.synchronizedSet(new HashSet<>());
@@ -240,10 +240,20 @@ public final class Monitor implements Runnable {
             if (ok && Strategie.ingressoValido(lv.strategia, c, lv.obiettivo)) scattati.add(lv);
         }
         if (scattati.isEmpty()) return;
-        Analisi.Livello lv = scattati.get(0);
-        for (Analisi.Livello x : scattati) if (x.priorita > lv.priorita) lv = x;
+        // tra i pattern scattati scelgo quello con il punteggio storico piu' alto
+        Analisi.Livello lv = null;
+        int punti = -1;
+        for (Analisi.Livello x : scattati) {
+            int p = Analisi.punteggioTitolo(tk, x.strategia, statStrategia);
+            if (lv == null || p > punti || (p == punti && x.priorita > lv.priorita)) { lv = x; punti = p; }
+        }
         String nome = lv.strategia;
         segna(tk + "|entrata");
+        int soglia = (int) Json.num(imp.get().get("punteggio_minimo"), Analisi.PUNTEGGIO_MINIMO);
+        if (punti < soglia) {
+            log("Scartato " + tk + " (" + nome + "): punteggio " + punti + "/100 sotto la soglia " + soglia);
+            return;
+        }
         Strategie.Strategia s = Strategie.get(nome);
         double stop = c * (1 - s.stopPct);
         String nomeSoc = Mercati.nome(tk), isin = Mercati.isin(tk);
@@ -269,7 +279,8 @@ public final class Monitor implements Runnable {
         int n = archivio.posizioni(null).size();
         int mx = (int) Json.num(imp.get().get("max_posizioni"), 3);
         if (n >= mx) r.append("\n⚠️ Hai già ").append(n).append(" posizioni aperte (massimo ").append(mx).append(").");
-        r.append("\n\n").append(Analisi.testoStatistica(serie, tk, nome, m.nome, orizzonte(), statStrategia));
+        r.append("\n\n").append(Analisi.testoStatistica(tk, nome, m.nome, orizzonte(), statStrategia))
+                .append("\n(stima sui dati degli ultimi 5 anni, non una garanzia)");
         List<String> altri = new ArrayList<>();
         for (Analisi.Livello x : scattati) if (x != lv) altri.add(x.strategia);
         if (!altri.isEmpty()) r.append("\nScattati anche: ").append(String.join(", ", altri));
@@ -280,7 +291,7 @@ public final class Monitor implements Runnable {
                 new String[]{"✅ Ho comprato", "c|" + tk + "|" + String.format(java.util.Locale.US, "%.2f", c) + "|" + indice},
                 new String[]{"❌ Ignoro", "x|" + tk}), Collections.singletonList(isin), link);
         asc.avviso(tk, "COMPRA " + nomeSoc + " a " + conEuro(tk, c) + " - " + nome, true);
-        log("AVVISO: COMPRA " + tk + " a " + Formato.num(c) + " " + m.valuta + " (" + nome + ")");
+        log("AVVISO: COMPRA " + tk + " a " + Formato.num(c) + " " + m.valuta + " (" + nome + ", punteggio " + punti + ")");
     }
 
     void valutaPosizione(Map<String, Object> p, Prezzi.Quotazione q) {

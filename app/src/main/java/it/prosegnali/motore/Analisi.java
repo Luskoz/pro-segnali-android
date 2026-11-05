@@ -143,62 +143,137 @@ public final class Analisi {
         return Strategie.ingressoValido(st.nome, prezzo, L.obiettivo[i - 1]) ? prezzo : Double.NaN;
     }
 
-    /** [casi, casi oltre +5% entro `orizzonte` giorni] negli ultimi anni (come la versione PC). */
-    public static int[] statisticaPattern(Serie s, String nome, int orizzonte) {
-        Strategie.Strategia st = Strategie.get(nome);
-        Strategie.Livelli L = st.calcolo.calcola(s);
-        int casi = 0, oltre = 0;
-        int i = Math.max(inizioAnni(s, ANNI_STATISTICA), 1);
-        while (i < s.n - orizzonte) {
-            double prezzo = ingresso(st, s, L, i);
-            if (Double.isNaN(prezzo)) { i++; continue; }
-            casi++;
-            double max = Double.NEGATIVE_INFINITY;
-            for (int k = i + 1; k <= i + orizzonte; k++) max = Math.max(max, s.h[k]);
-            if (max >= prezzo * (1 + SOGLIA_STATISTICA)) oltre++;
-            i += orizzonte;
+    public static final int[] GIORNI_RIALZO = {7, 15, 30};
+    public static final int PESO_MERCATO = 10;
+    public static final int PUNTEGGIO_MINIMO = 60;
+
+    /** Somme delle statistiche di un pattern (si possono sommare tra titoli), come sul PC. */
+    public static final class Stat {
+        public int casi, oltre, pos30;
+        public double r7, r15, r30;
+
+        void somma(Stat x) {
+            casi += x.casi; oltre += x.oltre; pos30 += x.pos30;
+            r7 += x.r7; r15 += x.r15; r30 += x.r30;
         }
-        return new int[]{casi, oltre};
+
+        double valore(String k) {
+            switch (k) {
+                case "oltre": return oltre;
+                case "r7": return r7;
+                case "r15": return r15;
+                case "r30": return r30;
+                default: return pos30;
+            }
+        }
     }
 
-    public static String testoStatistica(Map<String, Serie> serie, String titolo, String nome,
-                                         String mercato, int orizzonte,
-                                         Map<String, int[]> perStrategia) {
-        StringBuilder b = new StringBuilder("📈 Pattern: ").append(nome).append('\n');
-        Serie s = serie.get(titolo);
-        int[] st = s != null && s.n >= 300 ? statisticaPattern(s, nome, orizzonte) : new int[]{0, 0};
-        if (st[0] > 0) {
-            b.append("Su ").append(titolo).append(" negli ultimi ").append(ANNI_STATISTICA)
-                    .append(" anni si è verificato ").append(st[0]).append(" volte: in ").append(st[1])
-                    .append(" (").append(Math.round(st[1] * 100.0 / st[0])).append("%) è salito oltre +5% entro ")
-                    .append(orizzonte).append(" giorni.");
-            if (st[0] < 10) b.append(" (pochi casi: dato poco affidabile)");
+    public static Stat statisticaCompleta(Serie s, String nome, int orizzonte) {
+        Strategie.Strategia st = Strategie.get(nome);
+        Strategie.Livelli L = st.calcolo.calcola(s);
+        Stat r = new Stat();
+        int lungo = Math.max(orizzonte, 30);
+        int i = Math.max(inizioAnni(s, ANNI_STATISTICA), 1);
+        while (i < s.n - lungo) {
+            double prezzo = ingresso(st, s, L, i);
+            if (Double.isNaN(prezzo)) { i++; continue; }
+            r.casi++;
+            double max = Double.NEGATIVE_INFINITY;
+            for (int k = i + 1; k <= i + orizzonte; k++) if (!Double.isNaN(s.h[k])) max = Math.max(max, s.h[k]);
+            if (max >= prezzo * (1 + SOGLIA_STATISTICA)) r.oltre++;
+            r.r7 += s.c[i + 7] / prezzo - 1;
+            r.r15 += s.c[i + 15] / prezzo - 1;
+            r.r30 += s.c[i + 30] / prezzo - 1;
+            if (s.c[i + 30] > prezzo) r.pos30++;
+            i += orizzonte;
+        }
+        return r;
+    }
+
+    /** [casi, casi oltre +5% entro `orizzonte` giorni] (compatibilita'). */
+    public static int[] statisticaPattern(Serie s, String nome, int orizzonte) {
+        Stat x = statisticaCompleta(s, nome, orizzonte);
+        return new int[]{x.casi, x.oltre};
+    }
+
+    /** Statistiche di mercato: chiave "TITOLO|pattern" per i titoli e "pattern" per il totale. */
+    public static Map<String, Stat> statisticheMercato(Map<String, Serie> serie, List<String> nomi,
+                                                       int orizzonte) {
+        Map<String, Stat> out = new LinkedHashMap<>();
+        for (String nome : nomi) {
+            Stat tot = new Stat();
+            for (Map.Entry<String, Serie> e : serie.entrySet()) {
+                if (e.getValue().n < 300) continue;
+                Stat x = statisticaCompleta(e.getValue(), nome, orizzonte);
+                out.put(e.getKey() + "|" + nome, x);
+                tot.somma(x);
+            }
+            out.put(nome, tot);
+        }
+        return out;
+    }
+
+    private static double scala(double x, double zero, double pieno) {
+        return Math.min(Math.max((x - zero) / (pieno - zero), 0.0), 1.0);
+    }
+
+    /** Punteggio 0-100 (stesso algoritmo del PC). */
+    public static int punteggio(Stat titolo, Stat mercato) {
+        int n = titolo != null ? titolo.casi : 0, nm = mercato != null ? mercato.casi : 0;
+        if (n == 0 && nm == 0) return 0;
+        String[] k = {"oltre", "r7", "r15", "r30", "pos30"};
+        double[] v = new double[5];
+        for (int j = 0; j < 5; j++) {
+            double base = nm > 0 ? mercato.valore(k[j]) / nm : 0.0;
+            v[j] = n == 0 ? base : (titolo.valore(k[j]) + PESO_MERCATO * base) / (n + PESO_MERCATO);
+        }
+        double p = 0.40 * scala(v[0], 0.30, 0.80) + 0.25 * scala(v[3], -0.02, 0.08)
+                + 0.15 * scala(v[2], -0.02, 0.06) + 0.10 * scala(v[1], -0.02, 0.04)
+                + 0.10 * scala(v[4], 0.40, 0.80);
+        return (int) Math.floor(p * 100 + 0.5);
+    }
+
+    public static int punteggioTitolo(String titolo, String nome, Map<String, Stat> stat) {
+        if (stat == null) return 0;
+        Stat t = stat.get(titolo + "|" + nome), m = stat.get(nome);
+        return punteggio(t != null && t.casi > 0 ? t : null, m != null && m.casi > 0 ? m : null);
+    }
+
+    public static String giudizio(int p) {
+        if (p >= 80) return "molto favorevole";
+        if (p >= 60) return "favorevole";
+        if (p >= 40) return "incerto";
+        if (p >= 20) return "sfavorevole";
+        return "molto sfavorevole";
+    }
+
+    public static String testoStatistica(String titolo, String nome, String mercato, int orizzonte,
+                                         Map<String, Stat> stat) {
+        StringBuilder b = new StringBuilder("📈 Pattern identificato: ").append(nome).append('\n');
+        Stat st = stat == null ? null : stat.get(titolo + "|" + nome);
+        if (st != null && st.casi > 0) {
+            int c = st.casi;
+            b.append("Negli ultimi ").append(ANNI_STATISTICA).append(" anni su ").append(titolo)
+                    .append(" si è verificato ").append(c).append(" volte: in ").append(st.oltre)
+                    .append(" (").append((long) Math.floor(st.oltre * 100.0 / c + 0.5))
+                    .append("%) è salito oltre +5% entro ").append(orizzonte).append(" giorni.");
+            if (c < 10) b.append(" (pochi casi: dato poco affidabile)");
+            b.append("\nRialzo medio: a 7 giorni ").append(Formato.pct(st.r7 / c * 100, 1))
+                    .append(" · a 15 giorni ").append(Formato.pct(st.r15 / c * 100, 1))
+                    .append(" · a 30 giorni ").append(Formato.pct(st.r30 / c * 100, 1));
         } else {
             b.append("Su ").append(titolo).append(" il pattern non si era mai verificato negli ultimi ")
                     .append(ANNI_STATISTICA).append(" anni.");
         }
-        int[] tot = perStrategia == null ? null : perStrategia.get(nome);
-        if (tot != null && tot[0] > 0) {
-            b.append("\nSu tutti i titoli ").append(mercato).append(": ").append(tot[0]).append(" volte, ")
-                    .append(Math.round(tot[1] * 100.0 / tot[0])).append("% oltre +5%.");
+        Stat tot = stat == null ? null : stat.get(nome);
+        if (tot != null && tot.casi > 0) {
+            b.append("\nSu tutti i titoli ").append(mercato).append(": ").append(tot.casi).append(" volte, ")
+                    .append((long) Math.floor(tot.oltre * 100.0 / tot.casi + 0.5)).append("% oltre +5%, ")
+                    .append("rialzo medio a 30 giorni ").append(Formato.pct(tot.r30 / tot.casi * 100, 1)).append('.');
         }
+        int p = punteggioTitolo(titolo, nome, stat);
+        b.append("\n🎯 PUNTEGGIO: ").append(p).append("/100 - ").append(giudizio(p));
         return b.toString();
-    }
-
-    public static Map<String, int[]> statisticheMercato(Map<String, Serie> serie, List<String> nomi,
-                                                        int orizzonte) {
-        Map<String, int[]> out = new LinkedHashMap<>();
-        for (String nome : nomi) {
-            int c = 0, o = 0;
-            for (Serie s : serie.values()) {
-                if (s.n < 300) continue;
-                int[] x = statisticaPattern(s, nome, orizzonte);
-                c += x[0];
-                o += x[1];
-            }
-            out.put(nome, new int[]{c, o});
-        }
-        return out;
     }
 
     // ------------------------------------------------------------------ classifica

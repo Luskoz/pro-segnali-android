@@ -98,6 +98,7 @@ public final class Nucleo {
         m.put("solo_migliori", false);
         m.put("quanti_migliori", 3L);
         m.put("orizzonte_classifica", 30L);
+        m.put("punteggio_minimo", 60L);
         m.put("monitor_su", "");
         return m;
     }
