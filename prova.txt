@@ -1,0 +1,2 @@
+python: {'AAPL': '2027-01-28', 'NVDA': '2026-11-17', 'ISP.MI': '2027-02-02'} errore= 
+java: {AAPL=2027-01-28, NVDA=2026-11-17, ISP.MI=2027-02-02} errore=
