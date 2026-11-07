@@ -1,30 +1,33 @@
-name: Scarica dati per analisi
+name: Prova trimestrali
 on:
   push:
     branches: [analisi]
 permissions:
   contents: write
 jobs:
-  dati:
+  prova:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install yfinance pandas
-      - name: Scarica
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: pip install yfinance pandas python-dotenv requests
+      - name: Prova
         run: |
           mkdir -p esito
-          bash prova_yahoo.sh > esito/prova_yahoo.txt 2>&1 || true
-          python dati.py 2>&1 | tail -150 > esito/log.txt || true
-          echo "fatto $(date -u)" > esito/esito.txt
+          (python prova_trim.py 2>&1 | tail -20) > esito/prova.txt || true
+          (mkdir -p cls && javac -encoding UTF-8 -d cls java/*.java ProvaTrim.java && java -cp cls ProvaTrim) >> esito/prova.txt 2>&1 || true
       - name: Pubblica
         run: |
           cd esito
           git init -q -b analisi-esito
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add -A && git commit -q -m "dati"
+          git add -A && git commit -q -m "prova"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" analisi-esito
