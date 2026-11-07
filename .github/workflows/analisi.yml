@@ -1,0 +1,30 @@
+name: Scarica dati per analisi
+on:
+  push:
+    branches: [analisi]
+permissions:
+  contents: write
+jobs:
+  dati:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install yfinance pandas
+      - name: Scarica
+        run: |
+          mkdir -p esito
+          bash prova_yahoo.sh > esito/prova_yahoo.txt 2>&1 || true
+          python dati.py 2>&1 | tail -150 > esito/log.txt || true
+          echo "fatto $(date -u)" > esito/esito.txt
+      - name: Pubblica
+        run: |
+          cd esito
+          git init -q -b analisi-esito
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A && git commit -q -m "dati"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" analisi-esito
