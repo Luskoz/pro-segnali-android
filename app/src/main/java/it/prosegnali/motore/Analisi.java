@@ -247,8 +247,61 @@ public final class Analisi {
         return "molto sfavorevole";
     }
 
+    // ---------------- punteggio 2: storico + volatilita' + distanza dai massimi + trimestrale
+    static final double[] MODELLO_P5 = {1.9062, 0.1999, 0.5007, -0.8193, 0.1848};
+    static final double[] MODELLO_P10 = {2.28, 0.687, 0.9928, -1.6832, 0.2752};
+    public static final int GIORNI_TRIM = 42;
+
+    /** {atr, dmax} sull'ultima barra completa, null se i dati non bastano. */
+    public static double[] fattori(Serie s) {
+        if (s == null || s.n < 253) return null;
+        int n = s.n;
+        double somma = 0.0;
+        for (int i = n - 14; i < n; i++)
+            somma += Math.max(Math.max(s.h[i] - s.l[i], Math.abs(s.h[i] - s.c[i - 1])), Math.abs(s.l[i] - s.c[i - 1]));
+        double massimo = Double.NEGATIVE_INFINITY;
+        for (int i = n - 252; i < n; i++) if (!Double.isNaN(s.h[i])) massimo = Math.max(massimo, s.h[i]);
+        double atr = somma / 14 / s.c[n - 1];
+        if (Double.isNaN(atr) || massimo <= 0 || Double.isNaN(s.c[n - 1])) return null;
+        return new double[]{atr, s.c[n - 1] / massimo - 1};
+    }
+
+    private static double logistica(double[] k, double storico, double atr, double dmax, double trim) {
+        double z = k[0] + k[1] * storico / 100 + k[2] * Math.log(Math.min(Math.max(atr, 0.005), 0.15))
+                + k[3] * Math.min(Math.max(dmax, -0.5), 0.0) + k[4] * trim;
+        return 1 / (1 + Math.exp(-z));
+    }
+
+    /** {punteggio, p5, p10, storico}; p5/p10 NaN se mancano i fattori. */
+    public static double[] punteggioSegnale(String titolo, String nome, Map<String, Stat> stat,
+                                            double[] fattori, Integer ggTrim) {
+        int storico = punteggioTitolo(titolo, nome, stat);
+        if (fattori == null) return new double[]{storico, Double.NaN, Double.NaN, storico};
+        double trim = ggTrim != null && ggTrim >= 0 && ggTrim <= GIORNI_TRIM ? 1.0 : 0.0;
+        double p5 = logistica(MODELLO_P5, storico, fattori[0], fattori[1], trim);
+        double p10 = logistica(MODELLO_P10, storico, fattori[0], fattori[1], trim);
+        double p = 0.5 * scala(p5, 0.45, 0.70) + 0.5 * scala(p10, 0.15, 0.50);
+        return new double[]{Math.floor(p * 100 + 0.5), p5, p10, storico};
+    }
+
+    public static Integer giorniATrimestrale(String data, LocalDate oggi) {
+        if (data == null || data.isEmpty()) return null;
+        try {
+            long gg = java.time.temporal.ChronoUnit.DAYS.between(oggi, LocalDate.parse(data));
+            return gg >= 0 ? (int) gg : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public static String testoStatistica(String titolo, String nome, String mercato, int orizzonte,
                                          Map<String, Stat> stat) {
+        return testoStatistica(titolo, nome, mercato, orizzonte, stat, null, null, LocalDate.now());
+    }
+
+    public static String testoStatistica(String titolo, String nome, String mercato, int orizzonte,
+                                         Map<String, Stat> stat, double[] fattori, String dataTrim,
+                                         LocalDate oggi) {
         StringBuilder b = new StringBuilder("📈 Pattern identificato: ").append(nome).append('\n');
         Stat st = stat == null ? null : stat.get(titolo + "|" + nome);
         if (st != null && st.casi > 0) {
@@ -271,8 +324,22 @@ public final class Analisi {
                     .append((long) Math.floor(tot.oltre * 100.0 / tot.casi + 0.5)).append("% oltre +5%, ")
                     .append("rialzo medio a 30 giorni ").append(Formato.pct(tot.r30 / tot.casi * 100, 1)).append('.');
         }
-        int p = punteggioTitolo(titolo, nome, stat);
-        b.append("\n🎯 PUNTEGGIO: ").append(p).append("/100 - ").append(giudizio(p));
+        Integer gg = giorniATrimestrale(dataTrim, oggi);
+        double[] ps = punteggioSegnale(titolo, nome, stat, fattori, gg);
+        int punti = (int) ps[0];
+        boolean conModello = !Double.isNaN(ps[1]);
+        if (fattori != null)
+            b.append("\nVolatilità giornaliera media: ").append(Formato.num(fattori[0] * 100, 1))
+                    .append("% · dal massimo a 52 settimane: ").append(Formato.pct(fattori[1] * 100, 1));
+        if (gg != null && gg <= GIORNI_TRIM)
+            b.append("\n📅 Trimestrale il ").append(dataTrim, 8, 10).append('/').append(dataTrim, 5, 7).append(" (")
+                    .append(gg == 0 ? "oggi" : gg == 1 ? "domani" : "tra " + gg + " giorni")
+                    .append("): possibili salti di prezzo.");
+        if (conModello)
+            b.append("\nProbabilità stimata: +5% prima dello stop ").append((long) Math.floor(ps[1] * 100 + 0.5))
+                    .append("% · +10% prima dello stop ").append((long) Math.floor(ps[2] * 100 + 0.5)).append('%');
+        b.append("\n🎯 PUNTEGGIO: ").append(punti).append("/100 - ").append(giudizio(punti));
+        if (conModello) b.append(" (storico del pattern ").append((int) ps[3]).append("/100)");
         return b.toString();
     }
 

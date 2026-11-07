@@ -64,13 +64,15 @@ public final class Sincronia {
         s.put("formato", FORMATO);
         s.put("posizioni", new LinkedHashMap<String, Object>());
         s.put("storico", new LinkedHashMap<String, Object>());
+        s.put("segnali", new LinkedHashMap<String, Object>());
         s.put("impostazioni", new LinkedHashMap<String, Object>());
         Map<String, Object> c = new LinkedHashMap<>();
-        c.put("posizioni", new LinkedHashMap<String, Object>());
-        c.put("storico", new LinkedHashMap<String, Object>());
+        for (String k : SEZIONI) c.put(k, new LinkedHashMap<String, Object>());
         s.put("cancellati", c);
         return s;
     }
+
+    public static final String[] SEZIONI = {"posizioni", "storico", "segnali"};
 
     static String impronta(Object dati) {
         try {
@@ -91,7 +93,7 @@ public final class Sincronia {
     @SuppressWarnings("unchecked")
     public static Map<String, Object> unisci(Map<String, Object> a, Map<String, Object> b) {
         Map<String, Object> out = statoVuoto();
-        for (String sezione : new String[]{"posizioni", "storico"}) {
+        for (String sezione : SEZIONI) {
             Map<String, Object> canc = new LinkedHashMap<>();
             for (Map<String, Object> st : new Map[]{a, b}) {
                 Map<String, Object> c = sez(sez(st, "cancellati"), sezione);
@@ -120,7 +122,15 @@ public final class Sincronia {
 
     static String contenuto(Map<String, Object> st) {
         Map<String, Object> m = new LinkedHashMap<>();
-        for (String k : new String[]{"posizioni", "storico", "impostazioni", "cancellati"}) m.put(k, st.get(k));
+        for (String k : SEZIONI) m.put(k, st.get(k) instanceof Map ? st.get(k) : new LinkedHashMap<>());
+        m.put("impostazioni", st.get("impostazioni") instanceof Map ? st.get("impostazioni") : new LinkedHashMap<>());
+        Map<String, Object> c = new LinkedHashMap<>();
+        Object cc = st.get("cancellati");
+        for (String k : SEZIONI) {
+            Object v = cc instanceof Map ? ((Map<?, ?>) cc).get(k) : null;
+            c.put(k, v instanceof Map ? v : new LinkedHashMap<>());
+        }
+        m.put("cancellati", c);
         return impronta(m);
     }
 
@@ -128,8 +138,15 @@ public final class Sincronia {
     public static Map<String, Object> applicaModificheLocali(Map<String, Object> base,
             List<Map<String, Object>> posizioni, List<Map<String, Object>> storico,
             Map<String, Object> impostazioni, double adesso) {
+        return applicaModificheLocali(base, posizioni, storico, impostazioni, adesso, new ArrayList<>());
+    }
+
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> applicaModificheLocali(Map<String, Object> base,
+            List<Map<String, Object>> posizioni, List<Map<String, Object>> storico,
+            Map<String, Object> impostazioni, double adesso, List<Map<String, Object>> segnali) {
         Map<String, Object> nuovo = (Map<String, Object>) Json.copia(base);
-        Object[][] sezioni = {{"posizioni", posizioni, "titolo"}, {"storico", storico, "id"}};
+        Object[][] sezioni = {{"posizioni", posizioni, "titolo"}, {"storico", storico, "id"}, {"segnali", segnali, "id"}};
         for (Object[] s : sezioni) {
             String sezione = (String) s[0];
             Map<String, Map<String, Object>> attuali = new LinkedHashMap<>();
@@ -203,11 +220,12 @@ public final class Sincronia {
             List<Map<String, Object>> storico = archivio.leggiLista(Archivio.FILE_STORICO);
             for (Map<String, Object> r : storico) r.put("id", idOperazione(r));
             Map<String, Object> impostazioni = (Map<String, Object>) leggiFile(FILE_IMPOSTAZIONI, new LinkedHashMap<>());
+            List<Map<String, Object>> segnali = archivio.leggiLista(Archivio.FILE_SEGNALI);
 
             Object[] fiss = tg.fissato();
             Long mid = fiss == null ? null : (Long) fiss[0];
             double adesso = (primo && mid != null) ? 1.0 : System.currentTimeMillis() / 1000.0;
-            Map<String, Object> locale = applicaModificheLocali(base, posizioni, storico, impostazioni, adesso);
+            Map<String, Object> locale = applicaModificheLocali(base, posizioni, storico, impostazioni, adesso, segnali);
 
             Map<String, Object> remoto = null;
             if (mid != null && !mid.equals(ultimoFissato)) {
@@ -238,6 +256,16 @@ public final class Sincronia {
             if (!impronta(nuovoSto).equals(impronta(stoOrd))) {
                 archivio.scriviFile(Archivio.FILE_STORICO, nuovoSto, false);
                 esito.cambiati.add("storico");
+            }
+            Comparator<Map<String, Object>> perId = Comparator.comparing(r -> Json.str(r.get("id"), ""));
+            List<Map<String, Object>> nuoviSeg = new ArrayList<>();
+            for (Object r : sez(unito, "segnali").values()) nuoviSeg.add((Map<String, Object>) ((Map<String, Object>) r).get("dati"));
+            nuoviSeg.sort(perId);
+            List<Map<String, Object>> segOrd = new ArrayList<>(segnali);
+            segOrd.sort(perId);
+            if (!impronta(nuoviSeg).equals(impronta(segOrd))) {
+                archivio.scriviFile(Archivio.FILE_SEGNALI, nuoviSeg, false);
+                esito.cambiati.add("segnali");
             }
             Map<String, Object> nuoveImp = new LinkedHashMap<>(impostazioni);
             for (Map.Entry<String, Object> e : sez(unito, "impostazioni").entrySet())

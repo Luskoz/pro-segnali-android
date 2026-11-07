@@ -46,6 +46,7 @@ import java.util.Map;
 
 import it.prosegnali.motore.Analisi;
 import it.prosegnali.motore.Archivio;
+import it.prosegnali.motore.Diario;
 import it.prosegnali.motore.Formato;
 import it.prosegnali.motore.Json;
 import it.prosegnali.motore.Mercati;
@@ -55,7 +56,7 @@ import it.prosegnali.motore.Serie;
 import it.prosegnali.motore.Strategie;
 
 public class MainActivity extends Activity {
-    private static final String[] SCHEDE = {"Monitoraggio", "Posizioni", "Guadagni", "Classifica", "Impostazioni"};
+    private static final String[] SCHEDE = {"Monitoraggio", "Posizioni", "Guadagni", "Diario", "Classifica", "Impostazioni"};
     private static final DateTimeFormatter IT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
     private Nucleo n;
@@ -174,7 +175,8 @@ public class MainActivity extends Activity {
                 case 0: schedaMonitoraggio(); break;
                 case 1: schedaPosizioni(); break;
                 case 2: schedaGuadagni(); break;
-                case 3: schedaClassifica(); break;
+                case 3: schedaDiario(); break;
+                case 4: schedaClassifica(); break;
                 default: schedaImpostazioni();
             }
         } catch (Exception e) {
@@ -768,6 +770,82 @@ public class MainActivity extends Activity {
         }, d.getYear(), d.getMonthValue() - 1, d.getDayOfMonth());
         dp.setOnDismissListener(x -> { dialogoAperto = false; ricostruisci(); });
         dp.show();
+    }
+
+    // ================================================================== DIARIO
+
+    private String periodoDiario = "Tutto";
+
+    private static String perc(Double x) { return x == null ? "-" : Math.round(x * 100) + "%"; }
+
+    private void schedaDiario() {
+        List<String> periodi = Arrays.asList("Tutto", "Ultimi 30 giorni", "Ultimi 90 giorni", "Ultimi 365 giorni");
+        Spinner sp = new Spinner(this);
+        sp.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, periodi));
+        sp.setSelection(periodi.indexOf(periodoDiario), false);
+        sp.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                if (!periodi.get(pos).equals(periodoDiario)) { periodoDiario = periodi.get(pos); ricostruisci(); }
+            }
+            public void onNothingSelected(AdapterView<?> p) {}
+        });
+        contenuto.addView(sp);
+        List<Map<String, Object>> segnali = n.archivio.segnali();
+        if (!"Tutto".equals(periodoDiario)) {
+            String limite = LocalDate.now().minusDays(Integer.parseInt(periodoDiario.split(" ")[1])).toString();
+            segnali.removeIf(s -> String.valueOf(s.get("data")).compareTo(limite) < 0);
+        }
+        List<Map<String, Object>> pos = n.archivio.posizioni(null), sto = n.archivio.storico();
+        contenuto.addView(Ui.testo(this, "Ogni segnale d'acquisto viene registrato, anche quelli scartati. "
+                + "Dopo 30 giorni di borsa vedi se il titolo ha toccato prima il +5% o prima lo stop.", 13, false, Ui.GRIGIO));
+        LinearLayout t = Ui.scheda(this);
+        for (Diario.Riga r : Diario.riepilogo(segnali, pos, sto)) {
+            if (r.segnali == 0 && !r.nome.startsWith("Tutti")) continue;
+            t.addView(Ui.testo(this, r.nome + " · " + r.segnali + " segnali", 14, true, Ui.NOTTE));
+            t.addView(Ui.testo(this, r.conclusi == 0 ? "nessun esito ancora"
+                    : "con esito " + r.conclusi + ": +5% prima " + perc(r.p5) + " · +10% " + perc(r.p10)
+                    + " · stop prima " + perc(r.pstop) + (r.r30 == null ? "" : " · var. media 30 gg " + Formato.pct(r.r30 * 100, 1)),
+                    13, false, Ui.TESTO));
+        }
+        contenuto.addView(t);
+        java.util.Set<String> comp = Diario.comprati(segnali, pos, sto);
+        segnali.sort((a, b) -> (b.get("data") + " " + b.get("ora")).compareTo(a.get("data") + " " + a.get("ora")));
+        int mostrati = 0;
+        for (Map<String, Object> s : segnali) {
+            if (mostrati++ >= 150) break;
+            String tk = String.valueOf(s.get("titolo"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> es = s.get("esito") instanceof Map ? (Map<String, Object>) s.get("esito") : new LinkedHashMap<>();
+            Object primo = es.get("primo");
+            String esito;
+            int col;
+            if ("+5%".equals(primo)) {
+                esito = "✅ +5% in " + Math.round(Json.num(es.get("g5"), 0)) + " gg" + (es.get("g10") != null ? " (poi +10%)" : "");
+                col = Ui.VERDE;
+            } else if ("stop".equals(primo)) {
+                esito = "❌ stop in " + Math.round(Json.num(es.get("gstop"), 0)) + " gg";
+                col = Ui.ROSSO;
+            } else if ("nessuno".equals(primo)) {
+                esito = "➖ né +5% né stop in 30 gg";
+                col = Ui.GRIGIO;
+            } else {
+                esito = "⏳ in corso (" + Math.round(Json.num(es.get("giorni"), 0)) + "/30 gg)";
+                col = Ui.BLU;
+            }
+            LinearLayout c = Ui.scheda(this);
+            String data = String.valueOf(s.get("data"));
+            try { data = LocalDate.parse(data).format(IT); } catch (Exception ignorata) { /* data non valida */ }
+            c.addView(Ui.testo(this, Mercati.nome(tk) + " (" + tk + ") · " + data + " " + Json.str(s.get("ora"), ""), 14, true, Ui.NOTTE));
+            c.addView(Ui.testo(this, s.get("strategia") + " · punteggio " + Math.round(Json.num(s.get("punteggio"), 0))
+                    + " · " + (Boolean.TRUE.equals(s.get("inviato")) ? "inviato" : "scartato")
+                    + (comp.contains(String.valueOf(s.get("id"))) ? " · comprato" : ""), 13, false, Ui.TESTO));
+            c.addView(Ui.testo(this, "Prezzo " + Formato.num(Json.num(s.get("prezzo"), Double.NaN))
+                    + (Mercati.eUsa(tk) ? " $" : " €")
+                    + (es.get("max") == null ? "" : " · massimo " + Formato.pct(Json.num(es.get("max"), 0) * 100, 1))
+                    + (es.get("r30") == null ? "" : " · a 30 gg " + Formato.pct(Json.num(es.get("r30"), 0) * 100, 1)), 13, false, Ui.GRIGIO));
+            c.addView(Ui.testo(this, esito, 14, true, col));
+            contenuto.addView(c);
+        }
     }
 
     // ================================================================== CLASSIFICA

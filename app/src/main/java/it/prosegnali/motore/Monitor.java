@@ -49,6 +49,8 @@ public final class Monitor implements Runnable {
     public final Map<String, Double> ultimiPrezzi = Collections.synchronizedMap(new LinkedHashMap<>());
     private volatile LocalDate giorno;
     private Map<String, Analisi.Stat> statStrategia = new LinkedHashMap<>();
+    private Map<String, double[]> fattori = new LinkedHashMap<>();
+    private Map<String, String> trimestrali = new LinkedHashMap<>();
     private List<String> migliori = new ArrayList<>();
     private boolean classificaCalcolata;
     private final Set<String> avvisati = Collections.synchronizedSet(new HashSet<>());
@@ -159,6 +161,18 @@ public final class Monitor implements Runnable {
         livelli = lv;
         statoA("Calcolo le statistiche storiche dei pattern...");
         statStrategia = Analisi.statisticheMercato(complete, nomi, orizzonte());
+        Map<String, double[]> fat = new LinkedHashMap<>();
+        for (Map.Entry<String, Serie> e : complete.entrySet()) fat.put(e.getKey(), Analisi.fattori(e.getValue()));
+        fattori = fat;
+        trimestrali = Prezzi.trimestrali(new ArrayList<>(new java.util.TreeSet<>(complete.keySet())), cartella);
+        if (trimestrali.isEmpty() && !Prezzi.erroreTrimestrali.isEmpty())
+            log("Date delle trimestrali non disponibili: " + Prezzi.erroreTrimestrali);
+        try {
+            int nd = archivio.aggiornaEsiti(m.nome, complete);
+            if (nd > 0) log("Diario dei segnali: aggiornato l'esito di " + nd + " segnali.");
+        } catch (Exception e) {
+            log("Diario dei segnali: esiti non aggiornati (" + e.getMessage() + ")");
+        }
         giorno = oggi();
         caricaAvvisati();
         asc.livelli(m.nome, lv);
@@ -202,6 +216,43 @@ public final class Monitor implements Runnable {
         if (g != DayOfWeek.SATURDAY && g != DayOfWeek.SUNDAY) tg.invia(t.toString());
         log("Livelli calcolati: " + tutti.size() + " segnali possibili su " + lv.size() + " titoli ("
                 + String.join(", ", nomi) + ")" + (filtro ? " - FILTRO MERCATO ATTIVO" : ""));
+        try {
+            avvisiTrimestrali();
+        } catch (Exception e) {
+            log("Avvisi trimestrali non inviati: " + e.getMessage());
+        }
+    }
+
+    /** Avviso per le posizioni aperte con i conti in uscita entro 3 giorni. */
+    private void avvisiTrimestrali() {
+        LocalDate oggi = oggi();
+        DayOfWeek g = oggi.getDayOfWeek();
+        if (g == DayOfWeek.SATURDAY || g == DayOfWeek.SUNDAY) return;
+        for (Map<String, Object> p : archivio.posizioni(m.nome)) {
+            String tk = String.valueOf(p.get("titolo"));
+            String d = trimestrali.get(tk);
+            Integer gg = Analisi.giorniATrimestrale(d, oggi);
+            if (gg == null || gg > 3 || avvisati.contains(tk + "|trimestrale")) continue;
+            segna(tk + "|trimestrale");
+            Serie s = serie.get(tk);
+            double prezzo = Json.num(p.get("prezzo"), Double.NaN);
+            double c = s != null && s.n > 0 ? s.c[s.n - 1] : prezzo;
+            double var = (c / prezzo - 1) * 100;
+            String quando = gg == 0 ? "oggi" : gg == 1 ? "domani" : "tra " + gg + " giorni";
+            String nomeSoc = Mercati.nome(tk), isin = Mercati.isin(tk);
+            String msg = "📅 TRIMESTRALE IN ARRIVO · " + nomeSoc + "  " + m.bandiera + "\n"
+                    + tk + (isin.isEmpty() ? "" : "  ·  ISIN " + isin) + "\n"
+                    + "I conti escono il " + d.substring(8, 10) + "/" + d.substring(5, 7) + " (" + quando + ").\n"
+                    + "La tua posizione: " + Formato.pct(var, 1) + " dall'acquisto (ultima chiusura " + conEuro(tk, c) + ").\n"
+                    + "Nei giorni dei conti il prezzo può fare salti forti in tutte e due le direzioni e aprire già "
+                    + "sotto lo stop. Valuta se vendere prima, alzare lo stop se sei in guadagno, oppure tenere sapendo il rischio.";
+            Map<String, String> link = new LinkedHashMap<>();
+            link.put(nomeSoc, Mercati.scheda(tk));
+            tg.invia(msg, Collections.singletonList(new String[]{"✅ Ho venduto",
+                    "v|" + tk + "|" + String.format(java.util.Locale.US, "%.2f", c)}), Collections.singletonList(isin), link);
+            asc.avviso(tk, "TRIMESTRALE " + nomeSoc + " " + quando, false);
+            log("AVVISO: trimestrale di " + tk + " il " + d + " (" + quando + ")");
+        }
     }
 
     static String testoClassifica(List<Analisi.RigaClassifica> cl, List<String> scelti) {
@@ -243,13 +294,31 @@ public final class Monitor implements Runnable {
         // tra i pattern scattati scelgo quello con il punteggio storico piu' alto
         Analisi.Livello lv = null;
         int punti = -1;
+        Integer ggTrim = Analisi.giorniATrimestrale(trimestrali.get(tk), oggi());
         for (Analisi.Livello x : scattati) {
-            int p = Analisi.punteggioTitolo(tk, x.strategia, statStrategia);
+            int p = (int) Analisi.punteggioSegnale(tk, x.strategia, statStrategia, fattori.get(tk), ggTrim)[0];
             if (lv == null || p > punti || (p == punti && x.priorita > lv.priorita)) { lv = x; punti = p; }
         }
         String nome = lv.strategia;
         segna(tk + "|entrata");
         int soglia = (int) Json.num(imp.get().get("punteggio_minimo"), Analisi.PUNTEGGIO_MINIMO);
+        try {
+            ZonedDateTime ora = ZonedDateTime.now(m.fuso);
+            Map<String, Object> rec = new LinkedHashMap<>();
+            rec.put("data", ora.toLocalDate().toString());
+            rec.put("ora", String.format(java.util.Locale.ROOT, "%02d:%02d", ora.getHour(), ora.getMinute()));
+            rec.put("mercato", m.nome);
+            rec.put("titolo", tk);
+            rec.put("strategia", nome);
+            rec.put("prezzo", c);
+            rec.put("stop_pct", Strategie.get(nome).stopPct);
+            rec.put("punteggio", (long) punti);
+            rec.put("soglia", (long) soglia);
+            rec.put("inviato", punti >= soglia);
+            archivio.registraSegnale(rec);
+        } catch (Exception e) {
+            log("Diario dei segnali: non registrato (" + e.getMessage() + ")");
+        }
         if (punti < soglia) {
             log("Scartato " + tk + " (" + nome + "): punteggio " + punti + "/100 sotto la soglia " + soglia);
             return;
@@ -279,7 +348,8 @@ public final class Monitor implements Runnable {
         int n = archivio.posizioni(null).size();
         int mx = (int) Json.num(imp.get().get("max_posizioni"), 3);
         if (n >= mx) r.append("\n⚠️ Hai già ").append(n).append(" posizioni aperte (massimo ").append(mx).append(").");
-        r.append("\n\n").append(Analisi.testoStatistica(tk, nome, m.nome, orizzonte(), statStrategia))
+        r.append("\n\n").append(Analisi.testoStatistica(tk, nome, m.nome, orizzonte(), statStrategia,
+                        fattori.get(tk), trimestrali.get(tk), oggi()))
                 .append("\n(stima sui dati degli ultimi 5 anni, non una garanzia)");
         List<String> altri = new ArrayList<>();
         for (Analisi.Livello x : scattati) if (x != lv) altri.add(x.strategia);

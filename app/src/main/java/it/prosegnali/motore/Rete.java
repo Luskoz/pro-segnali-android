@@ -104,4 +104,28 @@ public final class Rete {
         try (OutputStream o = c.getOutputStream()) { o.write(b.toByteArray()); }
         return esegui(c);
     }
+
+    /** GET con intestazioni aggiuntive; restituisce anche i cookie ricevuti ("nome=valore; ..."). */
+    public static Risposta getConIntestazioni(String url, int timeoutSec, Map<String, String> intestazioni,
+                                             StringBuilder cookieRicevuti) throws IOException {
+        HttpURLConnection c = apri(url, timeoutSec);
+        c.setInstanceFollowRedirects(false);
+        if (intestazioni != null)
+            for (Map.Entry<String, String> e : intestazioni.entrySet()) c.setRequestProperty(e.getKey(), e.getValue());
+        int codice = c.getResponseCode();
+        if (cookieRicevuti != null) {
+            java.util.List<String> sc = c.getHeaderFields().get("Set-Cookie");
+            if (sc == null) sc = c.getHeaderFields().get("set-cookie");
+            if (sc != null) for (String x : sc) {
+                String coppia = x.split(";", 2)[0].trim();
+                if (coppia.isEmpty()) continue;
+                if (cookieRicevuti.length() > 0) cookieRicevuti.append("; ");
+                cookieRicevuti.append(coppia);
+            }
+        }
+        InputStream in = codice >= 400 ? c.getErrorStream() : c.getInputStream();
+        Risposta r = new Risposta(codice, leggiTutto(in));
+        c.disconnect();
+        return r;
+    }
 }

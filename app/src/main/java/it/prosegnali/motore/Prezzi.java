@@ -202,6 +202,93 @@ public final class Prezzi {
         return out;
     }
 
+    // ------------------------------------------------------------------ trimestrali
+
+    private static final String AGENTE_DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            + "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+    public static volatile String erroreTrimestrali = "";
+
+    /** Date delle prossime trimestrali {titolo: "AAAA-MM-GG"} (cache giornaliera in trimestrali.json). */
+    @SuppressWarnings("unchecked")
+    public static synchronized Map<String, String> trimestrali(List<String> titoli, File cartella) {
+        String oggi = LocalDate.now().toString();
+        File f = new File(cartella, "trimestrali.json");
+        Map<String, Object> cache = new LinkedHashMap<>();
+        try {
+            if (f.exists()) cache = Json.oggetto(new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8"));
+        } catch (Exception ignorata) { /* cache rovinata */ }
+        Map<String, Object> date = cache.get("date") instanceof Map ? (Map<String, Object>) cache.get("date") : new LinkedHashMap<>();
+        List<Object> fatti = cache.get("fatti") instanceof List ? (List<Object>) cache.get("fatti") : new ArrayList<>();
+        boolean valida = oggi.equals(cache.get("giorno"));
+        if (valida && fatti.containsAll(titoli)) return filtra(date, titoli, null);
+        Map<String, String> nuove;
+        try {
+            nuove = scaricaTrimestrali(titoli);
+        } catch (Exception e) {
+            erroreTrimestrali = String.valueOf(e.getMessage());
+            return filtra(date, titoli, oggi);
+        }
+        if (!valida) { date = new LinkedHashMap<>(); fatti = new ArrayList<>(); }
+        date.putAll(nuove);
+        java.util.TreeSet<String> tutti = new java.util.TreeSet<>();
+        for (Object x : fatti) tutti.add(String.valueOf(x));
+        tutti.addAll(titoli);
+        Map<String, Object> nuova = new LinkedHashMap<>();
+        nuova.put("giorno", oggi);
+        nuova.put("date", date);
+        nuova.put("fatti", new ArrayList<Object>(tutti));
+        try {
+            java.nio.file.Files.write(f.toPath(), Json.scrivi(nuova).getBytes("UTF-8"));
+        } catch (Exception ignorata) { /* solo cache */ }
+        return filtra(date, titoli, null);
+    }
+
+    private static Map<String, String> filtra(Map<String, Object> date, List<String> titoli, String minimo) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (String t : titoli) {
+            Object d = date.get(t);
+            if (d != null && (minimo == null || String.valueOf(d).compareTo(minimo) >= 0)) out.put(t, String.valueOf(d));
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    static Map<String, String> scaricaTrimestrali(List<String> titoli) throws Exception {
+        Map<String, String> h = new LinkedHashMap<>();
+        h.put("User-Agent", AGENTE_DESKTOP);
+        StringBuilder cookie = new StringBuilder();
+        Rete.getConIntestazioni("https://fc.yahoo.com/", 20, h, cookie);       // risponde 404 ma da' il cookie
+        if (cookie.length() == 0) throw new IllegalStateException("Yahoo non ha dato il cookie");
+        h.put("Cookie", cookie.toString());
+        String crumb = Rete.getConIntestazioni("https://query1.finance.yahoo.com/v1/test/getcrumb", 20, h, null).testo().trim();
+        if (crumb.isEmpty() || crumb.contains("<") || crumb.length() > 40)
+            throw new IllegalStateException("Yahoo non ha dato l'autorizzazione (crumb)");
+        long inizioOggi = LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toEpochSecond();
+        Map<String, String> out = new LinkedHashMap<>();
+        for (int i = 0; i < titoli.size(); i += 40) {
+            List<String> gruppo = titoli.subList(i, Math.min(i + 40, titoli.size()));
+            Rete.Risposta r = Rete.getConIntestazioni("https://query1.finance.yahoo.com/v7/finance/quote?symbols="
+                    + Rete.codifica(String.join(",", gruppo)) + "&crumb=" + Rete.codifica(crumb)
+                    + "&fields=earningsTimestamp,earningsTimestampStart,earningsTimestampEnd", 30, h, null);
+            if (r.codice != 200) throw new IllegalStateException("Yahoo trimestrali: codice " + r.codice);
+            Map<String, Object> qr = (Map<String, Object>) Json.oggetto(r.testo()).get("quoteResponse");
+            List<Object> ris = qr == null ? null : (List<Object>) qr.get("result");
+            if (ris == null) continue;
+            for (Object x : ris) {
+                Map<String, Object> q = (Map<String, Object>) x;
+                long min = Long.MAX_VALUE;
+                for (String k : new String[]{"earningsTimestamp", "earningsTimestampStart", "earningsTimestampEnd"}) {
+                    Object v = q.get(k);
+                    if (v instanceof Number && ((Number) v).longValue() >= inizioOggi) min = Math.min(min, ((Number) v).longValue());
+                }
+                if (min != Long.MAX_VALUE && q.get("symbol") != null)
+                    out.put(String.valueOf(q.get("symbol")),
+                            java.time.Instant.ofEpochSecond(min).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString());
+            }
+        }
+        return out;
+    }
+
     // ------------------------------------------------------------------ cambio
 
     private static volatile double cambio = Double.NaN;

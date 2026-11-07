@@ -21,6 +21,7 @@ import java.util.Map;
 public final class Archivio {
     public static final String FILE_POS = "posizioni.json";
     public static final String FILE_STORICO = "storico_operazioni.json";
+    public static final String FILE_SEGNALI = "segnali.json";
 
     public final File cartella;
     public final Object lock = new Object();
@@ -289,6 +290,50 @@ public final class Archivio {
             st.removeIf(r -> id.equals(r.get("id")));
             scrivi(FILE_STORICO, st);
             return st.size() < prima;
+        }
+    }
+
+    // ------------------------------------------------------------------ diario dei segnali
+
+    public List<Map<String, Object>> segnali() { return leggiLista(FILE_SEGNALI); }
+
+    public Map<String, Object> registraSegnale(Map<String, Object> rec) {
+        Map<String, Object> r = new LinkedHashMap<>(rec);
+        String id = r.get("data") + "|" + r.get("titolo") + "|" + r.get("strategia");
+        r.put("id", id);
+        synchronized (lock) {
+            String limite = LocalDate.parse(String.valueOf(r.get("data"))).minusDays(Diario.CONSERVA).toString();
+            List<Map<String, Object>> el = new ArrayList<>();
+            for (Map<String, Object> s : leggiLista(FILE_SEGNALI))
+                if (!id.equals(s.get("id")) && String.valueOf(s.get("data")).compareTo(limite) >= 0) el.add(s);
+            el.add(r);
+            scrivi(FILE_SEGNALI, el);
+        }
+        return r;
+    }
+
+    /** Esito dei segnali non ancora conclusi del mercato, con le barre complete. */
+    public int aggiornaEsiti(String mercato, Map<String, Serie> serie) {
+        synchronized (lock) {
+            List<Map<String, Object>> el = leggiLista(FILE_SEGNALI);
+            int cambiati = 0;
+            for (Map<String, Object> s : el) {
+                if (!mercato.equals(s.get("mercato")) || Boolean.TRUE.equals(Diario.esitoDi(s).get("completo"))) continue;
+                Serie x = serie.get(String.valueOf(s.get("titolo")));
+                if (x == null || x.n == 0) continue;
+                String[] date = new String[x.n];
+                for (int i = 0; i < x.n; i++) date[i] = x.date[i].toString();
+                String data = String.valueOf(s.get("data"));
+                if (date[x.n - 1].compareTo(data) < 0) continue;
+                Map<String, Object> es = Diario.esito(Json.num(s.get("prezzo"), Double.NaN),
+                        Json.num(s.get("stop_pct"), 0.08), date, x.h, x.l, x.c, data);
+                if (!Json.canonico(es).equals(Json.canonico(s.get("esito")))) {
+                    s.put("esito", es);
+                    cambiati++;
+                }
+            }
+            if (cambiati > 0) scrivi(FILE_SEGNALI, el);
+            return cambiati;
         }
     }
 }
