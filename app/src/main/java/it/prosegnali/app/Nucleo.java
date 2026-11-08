@@ -16,6 +16,7 @@ import java.util.Map;
 
 import it.prosegnali.motore.Analisi;
 import it.prosegnali.motore.Archivio;
+import it.prosegnali.motore.ArchivioVirtuale;
 import it.prosegnali.motore.Ascolto;
 import it.prosegnali.motore.Json;
 import it.prosegnali.motore.Mercati;
@@ -40,6 +41,7 @@ public final class Nucleo {
     public final Context ctx;
     public final File cartella;
     public final Archivio archivio;
+    public final ArchivioVirtuale virtuali;
     public final Sincronia sincronia;
     private final SharedPreferences prefs;
 
@@ -62,6 +64,7 @@ public final class Nucleo {
         this.cartella = ctx.getFilesDir();
         this.prefs = ctx.getSharedPreferences("prosegnali", Context.MODE_PRIVATE);
         this.archivio = new Archivio(cartella);
+        this.virtuali = new ArchivioVirtuale(archivio);
         this.sincronia = new Sincronia(archivio, "telefono");
         this.archivio.commissione = Json.num(impostazioni().get("commissione"), 1.0);
         this.archivio.dopoModifica = this::modificato;

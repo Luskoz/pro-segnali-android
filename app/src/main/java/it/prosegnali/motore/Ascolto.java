@@ -96,9 +96,45 @@ public final class Ascolto implements Runnable {
         if (cq != null) {
             Map<String, Object> msg = (Map<String, Object>) cq.get("message");
             if (msg == null || !dalMioChat(((Map<String, Object>) msg.get("chat")).get("id"))) return;
-            String[] parti = Json.str(cq.get("data"), "").split("\\|");
-            tg.togliPulsanti(msg.get("message_id"));
+            String dati = Json.str(cq.get("data"), "");
+            String[] parti = dati.split("\\|");
+            // dopo Compra resta Virtuale (e viceversa): un titolo puo' avere le due posizioni
+            List<Object> restanti = new ArrayList<>();
+            Object rm = msg.get("reply_markup");
+            if (rm instanceof Map && ((Map<String, Object>) rm).get("inline_keyboard") instanceof List)
+                for (Object riga : (List<Object>) ((Map<String, Object>) rm).get("inline_keyboard"))
+                    if (riga instanceof List) for (Object b : (List<Object>) riga) {
+                        String cd = Json.str(((Map<String, Object>) b).get("callback_data"), "");
+                        if (!cd.equals(dati) && (cd.startsWith("c|") || cd.startsWith("z|"))) restanti.add(b);
+                    }
+            if (("c".equals(parti[0]) || "z".equals(parti[0])) && !restanti.isEmpty())
+                tg.cambiaPulsanti(msg.get("message_id"), restanti);
+            else
+                tg.togliPulsanti(msg.get("message_id"));
             String id = String.valueOf(cq.get("id"));
+            if ("z".equals(parti[0]) && (parti.length == 3 || parti.length == 4)) {
+                Integer indice = parti.length == 4 ? Integer.valueOf(parti[3]) : null;
+                String tk = parti[1];
+                try {
+                    Map<String, Object> p = new ArchivioVirtuale(archivio).apri(tk, strategia(tk, indice),
+                            Double.parseDouble(parti[2]), cambio(tk));
+                    if (p == null) {
+                        tg.rispondiPulsante(id, "Già aperta");
+                        tg.invia("🧪 Su " + Mercati.nome(tk) + " (" + tk + ") c'è già una posizione virtuale aperta.");
+                    } else {
+                        tg.rispondiPulsante(id, "Virtuale aperta");
+                        tg.invia("🧪 Posizione virtuale aperta: " + Mercati.nome(tk) + " (" + tk + ") a "
+                                + Formato.num(Json.num(p.get("prezzo_eur"), 0)) + " €, " + Math.round(Json.num(p.get("importo"), 0))
+                                + " €.\nStop iniziale -" + Math.round(Json.num(p.get("stop_pct"), 0.08) * 100)
+                                + "%. Da +6% lo stop sale e resta 2 punti sotto il massimo. Vendo io in automatico e ti avviso.");
+                    }
+                } catch (IllegalStateException e) {
+                    tg.rispondiPulsante(id, "Non aperta");
+                    tg.invia("⚠️ Posizione virtuale non aperta (" + e.getMessage() + "). Riprova tra qualche minuto.");
+                }
+                azioni.modificato();
+                return;
+            }
             if ("c".equals(parti[0]) && (parti.length == 3 || parti.length == 4)) {
                 Integer indice = parti.length == 4 ? Integer.valueOf(parti[3]) : null;
                 try {

@@ -51,6 +51,7 @@ public final class Monitor implements Runnable {
     private Map<String, Analisi.Stat> statStrategia = new LinkedHashMap<>();
     private Map<String, double[]> fattori = new LinkedHashMap<>();
     private Map<String, String> trimestrali = new LinkedHashMap<>();
+    private final ArchivioVirtuale virtuali;
     private List<String> migliori = new ArrayList<>();
     private boolean classificaCalcolata;
     private final Set<String> avvisati = Collections.synchronizedSet(new HashSet<>());
@@ -61,6 +62,7 @@ public final class Monitor implements Runnable {
                    String chiaveFinnhub, File cartella, Ascoltatore asc) {
         this.m = m; this.archivio = archivio; this.imp = imp; this.tg = tg;
         this.chiaveFinnhub = chiaveFinnhub; this.cartella = cartella; this.asc = asc;
+        this.virtuali = new ArchivioVirtuale(archivio);
     }
 
     // ------------------------------------------------------------------ impostazioni
@@ -358,8 +360,9 @@ public final class Monitor implements Runnable {
         Map<String, String> link = new LinkedHashMap<>();
         link.put(nomeSoc, Mercati.scheda(tk));
         tg.invia(r.toString(), Arrays.asList(
-                new String[]{"✅ Ho comprato", "c|" + tk + "|" + String.format(java.util.Locale.US, "%.2f", c) + "|" + indice},
-                new String[]{"❌ Ignoro", "x|" + tk}), Collections.singletonList(isin), link);
+                new String[]{"✅ Compra", "c|" + tk + "|" + String.format(java.util.Locale.US, "%.2f", c) + "|" + indice},
+                new String[]{"🧪 Virtuale", "z|" + tk + "|" + String.format(java.util.Locale.US, "%.2f", c) + "|" + indice},
+                new String[]{"❌ Ignora", "x|" + tk}), Collections.singletonList(isin), link);
         asc.avviso(tk, "COMPRA " + nomeSoc + " a " + conEuro(tk, c) + " - " + nome, true);
         log("AVVISO: COMPRA " + tk + " a " + Formato.num(c) + " " + m.valuta + " (" + nome + ", punteggio " + punti + ")");
     }
@@ -406,6 +409,40 @@ public final class Monitor implements Runnable {
         log("AVVISO: VENDI " + tk + " (" + motivo + ") a " + Formato.num(c) + " " + m.valuta);
     }
 
+    /** Le posizioni virtuali le gestisce il programma: stop a gradini e vendita automatica. */
+    void gestisciVirtuale(Map<String, Object> p, Prezzi.Quotazione q) {
+        String tk = String.valueOf(p.get("titolo"));
+        double c = q.prezzo;
+        ZonedDateTime ora = ZonedDateTime.now(m.fuso);
+        String data = String.valueOf(p.get("data"));
+        int giorni = Analisi.giorniLavorativi(LocalDate.parse(data.substring(0, 10)), ora.toLocalDate()) + 1;
+        Object[] r = ArchivioVirtuale.valuta(p, c, giorni, !ora.toLocalTime().isBefore(m.chiusura.minusMinutes(30)));
+        if (r[0] != null) {
+            virtuali.modificaVirtuale(tk, new Object[][]{{"gradino", (long) (int) (Integer) r[0]}});
+            log("Virtuale " + tk + ": massimo " + String.format(java.util.Locale.ROOT, "%+d", (Integer) r[0]) + "%, stop aggiornato");
+        }
+        String motivo = (String) r[1];
+        if (motivo == null) return;
+        double camb = Mercati.eUsa(tk) ? cambio() : 1.0;
+        if (Double.isNaN(camb)) return;
+        Map<String, Object> rec = virtuali.chiudiVirtuale(tk, c, camb, motivo);
+        if (rec == null) return;
+        String nomeSoc = Mercati.nome(tk), isin = Mercati.isin(tk);
+        String msg = "🧪 VIRTUALE VENDUTO · " + nomeSoc + "  " + m.bandiera + "\n"
+                + tk + (isin.isEmpty() ? "" : "  ·  ISIN " + isin) + "\n"
+                + "Motivo: " + motivo + "\n"
+                + "Acquisto " + Formato.num(Json.num(rec.get("prezzo_eur"), 0)) + " € → vendita "
+                + Formato.num(Json.num(rec.get("prezzo_vendita_eur"), 0)) + " €\n"
+                + "Risultato: " + Formato.pct(Json.num(rec.get("rend_lordo_pct"), 0), 2) + " ("
+                + Formato.euroSegno(Json.num(rec.get("netto_eur_stimato"), 0)) + " netti su "
+                + Math.round(Json.num(rec.get("importo"), 0)) + " €)";
+        Map<String, String> link = new LinkedHashMap<>();
+        link.put(nomeSoc, Mercati.scheda(tk));
+        tg.invia(msg, Collections.emptyList(), Collections.singletonList(isin), link);
+        asc.avviso(tk, "🧪 Virtuale venduto " + nomeSoc + " (" + motivo + ")", false);
+        log("VIRTUALE: venduto " + tk + " a " + Formato.num(c) + " " + m.valuta + " (" + motivo + ")");
+    }
+
     // ------------------------------------------------------------------ ciclo
 
     private boolean aperto() {
@@ -431,7 +468,11 @@ public final class Monitor implements Runnable {
             if (!posizioni.containsKey(t) && !avvisati.contains(t + "|entrata")) osservati.add(t);
         osservati.sort((a, b) -> Double.compare(minDistanza(a), minDistanza(b)));
         List<String> elenco = new ArrayList<>(posizioni.keySet());
-        elenco.addAll(osservati);
+        for (Map<String, Object> v : virtuali.posizioni(m.nome)) {
+            String t = String.valueOf(v.get("titolo"));
+            if (!elenco.contains(t)) elenco.add(t);
+        }
+        for (String t : osservati) if (!elenco.contains(t)) elenco.add(t);
         long inizio = System.currentTimeMillis();
         int ricevuti = 0;
         List<Double> ritardi = new ArrayList<>();
@@ -467,6 +508,12 @@ public final class Monitor implements Runnable {
 
     private void gestisci(String tk, Prezzi.Quotazione q) {
         ultimiPrezzi.put(tk, q.prezzo);
+        try {
+            Map<String, Object> v = virtuali.posizione(tk);
+            if (v != null) gestisciVirtuale(v, q);
+        } catch (Exception e) {
+            log("Errore sulla posizione virtuale " + tk + ": " + e.getMessage());
+        }
         try {
             Map<String, Object> p = archivio.posizione(tk);
             if (p != null) valutaPosizione(p, q);

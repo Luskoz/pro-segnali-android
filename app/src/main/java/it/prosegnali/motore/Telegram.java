@@ -123,6 +123,19 @@ public class Telegram {
         } catch (Exception ignorata) { /* messaggio troppo vecchio */ }
     }
 
+    /** Sostituisce i pulsanti di un messaggio con quelli indicati (una riga). */
+    public void cambiaPulsanti(Object messageId, List<Object> riga) {
+        try {
+            Map<String, String> c = new LinkedHashMap<>();
+            c.put("chat_id", chat);
+            c.put("message_id", String.valueOf(messageId));
+            Map<String, Object> markup = new LinkedHashMap<>();
+            markup.put("inline_keyboard", Collections.singletonList(riga));
+            c.put("reply_markup", Json.scrivi(markup));
+            chiama("editMessageReplyMarkup", c, 15);
+        } catch (Exception ignorata) { /* messaggio troppo vecchio */ }
+    }
+
     public void rispondiPulsante(String id, String testo) {
         try {
             Map<String, String> c = new LinkedHashMap<>();

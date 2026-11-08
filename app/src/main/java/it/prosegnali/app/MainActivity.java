@@ -46,6 +46,7 @@ import java.util.Map;
 
 import it.prosegnali.motore.Analisi;
 import it.prosegnali.motore.Archivio;
+import it.prosegnali.motore.ArchivioVirtuale;
 import it.prosegnali.motore.Diario;
 import it.prosegnali.motore.Formato;
 import it.prosegnali.motore.Json;
@@ -56,7 +57,7 @@ import it.prosegnali.motore.Serie;
 import it.prosegnali.motore.Strategie;
 
 public class MainActivity extends Activity {
-    private static final String[] SCHEDE = {"Monitoraggio", "Posizioni", "Guadagni", "Diario", "Classifica", "Impostazioni"};
+    private static final String[] SCHEDE = {"Monitoraggio", "Posizioni", "Guadagni", "Virtuali", "Diario", "Classifica", "Impostazioni"};
     private static final DateTimeFormatter IT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
     private Nucleo n;
@@ -174,9 +175,10 @@ public class MainActivity extends Activity {
             switch (scheda) {
                 case 0: schedaMonitoraggio(); break;
                 case 1: schedaPosizioni(); break;
-                case 2: schedaGuadagni(); break;
-                case 3: schedaDiario(); break;
-                case 4: schedaClassifica(); break;
+                case 2: schedaGuadagni(n.archivio, false); break;
+                case 3: schedaGuadagni(n.virtuali, true); break;
+                case 4: schedaDiario(); break;
+                case 5: schedaClassifica(); break;
                 default: schedaImpostazioni();
             }
         } catch (Exception e) {
@@ -395,13 +397,21 @@ public class MainActivity extends Activity {
         r.addView(Ui.pulsante(this, "+ Aggiungi", Ui.VERDE, v -> dialogoAggiungi()));
         r.addView(Ui.pulsante(this, "↻ Aggiorna prezzi", Ui.BLU, v -> aggiornaPrezzi()));
         contenuto.addView(r);
+        boolean conVirtuali = "1".equals(n.pref("mostra_virtuali"));
+        CheckBox cv = new CheckBox(this);
+        cv.setText("🧪 Comprendi virtuali");
+        cv.setChecked(conVirtuali);
+        cv.setOnCheckedChangeListener((b, ok) -> { n.setPref("mostra_virtuali", ok ? "1" : ""); ricostruisci(); });
+        contenuto.addView(cv);
         List<Map<String, Object>> pos = n.archivio.posizioni(null);
-        if (pos.isEmpty()) {
+        List<Map<String, Object>> virt = conVirtuali ? n.virtuali.posizioni(null) : new ArrayList<>();
+        if (pos.isEmpty() && virt.isEmpty()) {
             contenuto.addView(Ui.testo(this, "Nessuna posizione aperta.", 14, false, Ui.GRIGIO));
             return;
         }
         double totale = 0;
         int conPrezzo = 0;
+        for (Map<String, Object> p : virt) contenuto.addView(schedaVirtuale(p));
         for (Map<String, Object> p : pos) {
             String tk = String.valueOf(p.get("titolo"));
             Double cambio = n.cambioPer(tk);
@@ -430,7 +440,7 @@ public class MainActivity extends Activity {
                         + (Double.isNaN(rif.obiettivo) ? "" : " · Obiettivo " + Formato.num(rif.obiettivo / cambio) + " €")
                         + " · giorno " + rif.giorni + "/" + rif.maxGiorni, 13, false, Ui.GRIGIO));
             }
-            s.setOnClickListener(v -> azioniPosizione(p));
+            s.setOnClickListener(v -> azioniPosizione(p, n.archivio));
             contenuto.addView(s);
         }
         if (conPrezzo > 0)
@@ -438,6 +448,36 @@ public class MainActivity extends Activity {
                     15, true, totale >= 0 ? Ui.VERDE : Ui.ROSSO), 1);
         contenuto.addView(Ui.testo(this, "Tocca una posizione per vendere, modificarla o vedere il grafico. "
                 + "Valori in euro; 'netto' = tolte le commissioni di acquisto e vendita, prima delle tasse.", 12, false, Ui.GRIGIO));
+    }
+
+    /** Scheda di una posizione virtuale (gestita in automatico dal programma). */
+    private LinearLayout schedaVirtuale(Map<String, Object> p) {
+        String tk = String.valueOf(p.get("titolo"));
+        Double cambio = n.cambioPer(tk);
+        double acq = Archivio.prezzoAcquistoEur(p, cambio);
+        Double ora = prezzoOra(tk);
+        double oraEur = ora != null && cambio != null ? ora / cambio : Double.NaN;
+        double[] ris = Double.isNaN(oraEur) ? null : n.virtuali.risultato(p, oraEur, cambio);
+        LinearLayout s = Ui.scheda(this);
+        s.addView(Ui.testo(this, "🧪 " + Mercati.nome(tk) + "  (" + tk + ") · VIRTUALE", 16, true, Ui.BLU));
+        s.addView(Ui.testo(this, "ISIN " + Mercati.isin(tk) + " · " + p.get("strategia"), 12, false, Ui.GRIGIO));
+        s.addView(Ui.testo(this, "Aperta " + dataIt(String.valueOf(p.get("data"))) + " a "
+                + (Double.isNaN(acq) ? "n.d." : Formato.num(acq) + " €") + " · " + Formato.num(Json.num(p.get("importo"), 0)) + " €",
+                13, false, Ui.TESTO));
+        if (ris != null)
+            s.addView(Ui.testo(this, "Ora " + Formato.num(oraEur) + " € (" + Formato.pct(ris[4], 2) + ")  →  netto "
+                    + Formato.euroSegno(ris[3]), 14, true, ris[3] >= 0 ? Ui.VERDE : Ui.ROSSO));
+        int g = (int) Json.num(p.get("gradino"), 0);
+        double stop = Json.num(p.get("stop"), Double.NaN);
+        int giorni = 0;
+        try { giorni = Analisi.giorniLavorativi(LocalDate.parse(String.valueOf(p.get("data")).substring(0, 10)), LocalDate.now()) + 1; }
+        catch (Exception ignorata) { /* data non valida */ }
+        if (!Double.isNaN(stop) && cambio != null)
+            s.addView(Ui.testo(this, "Stop " + Formato.num(stop / cambio) + " €"
+                    + (g >= ArchivioVirtuale.GRADINO_INIZIO ? " (" + String.format(java.util.Locale.ROOT, "%+d", g - ArchivioVirtuale.GRADINO_DISTANZA) + "%, massimo raggiunto " + String.format(java.util.Locale.ROOT, "%+d", g) + "%)" : "")
+                    + " · giorno " + giorni + "/" + ArchivioVirtuale.GIORNI, 13, false, Ui.GRIGIO));
+        s.setOnClickListener(v -> azioniPosizione(p, n.virtuali));
+        return s;
     }
 
     private static String azioni(double q) {
@@ -458,6 +498,7 @@ public class MainActivity extends Activity {
 
     private void aggiornaPrezzi() {
         List<Map<String, Object>> pos = n.archivio.posizioni(null);
+        pos.addAll(n.virtuali.posizioni(null));
         inBackground("Scarico i prezzi", () -> {
             List<String> europa = new ArrayList<>();
             for (Map<String, Object> p : pos) {
@@ -473,21 +514,21 @@ public class MainActivity extends Activity {
         }, null);
     }
 
-    private void azioniPosizione(Map<String, Object> p) {
+    private void azioniPosizione(Map<String, Object> p, Archivio arch) {
         String tk = String.valueOf(p.get("titolo"));
-        dialogo(Mercati.nome(tk) + " (" + tk + ")")
+        dialogo((arch instanceof ArchivioVirtuale ? "🧪 VIRTUALE · " : "") + Mercati.nome(tk) + " (" + tk + ")")
                 .setItems(new String[]{"Vendi", "Modifica", "Grafico e dati", "Elimina (errore di inserimento)"}, (d, i) -> {
-                    if (i == 0) handler.post(() -> dialogoVendi(p));
-                    else if (i == 1) handler.post(() -> dialogoModifica(p));
+                    if (i == 0) handler.post(() -> dialogoVendi(p, arch));
+                    else if (i == 1) handler.post(() -> dialogoModifica(p, arch));
                     else if (i == 2) apriScheda(tk);
                     else handler.post(() -> dialogo("Elimina " + tk)
                             .setMessage("Eliminare la posizione senza registrare la vendita nello storico?")
-                            .setPositiveButton("Elimina", (x, y) -> n.archivio.elimina(tk))
+                            .setPositiveButton("Elimina", (x, y) -> arch.elimina(tk))
                             .setNegativeButton("Annulla", null).show());
                 }).show();
     }
 
-    private void dialogoVendi(Map<String, Object> p) {
+    private void dialogoVendi(Map<String, Object> p, Archivio arch) {
         String tk = String.valueOf(p.get("titolo"));
         Double cambio = n.cambioPer(tk);
         double acq = Archivio.prezzoAcquistoEur(p, cambio);
@@ -506,7 +547,7 @@ public class MainActivity extends Activity {
         l.addView(esito);
         Runnable calcola = () -> {
             try {
-                double[] r = n.archivio.risultato(p, Ui.numero(prezzo.getText().toString()), cambio);
+                double[] r = arch.risultato(p, Ui.numero(prezzo.getText().toString()), cambio);
                 esito.setTextColor(r[3] >= 0 ? Ui.VERDE : Ui.ROSSO);
                 esito.setText("Variazione " + Formato.pct(r[4], 2) + "\nLordo " + Formato.euroSegno(r[1])
                         + "\nCommissioni -" + Formato.num(r[2]) + " €\nRISULTATO NETTO " + Formato.euroSegno(r[3]));
@@ -524,7 +565,7 @@ public class MainActivity extends Activity {
                     try {
                         double pr = Ui.numero(prezzo.getText().toString());
                         LocalDate dv = leggiData(data.getText().toString());
-                        Map<String, Object> rec = n.archivio.chiudi(tk, pr, cambio, dv.toString());
+                        Map<String, Object> rec = arch.chiudi(tk, pr, cambio, dv.toString());
                         if (rec != null) {
                             n.log("Venduto " + tk + " a " + Formato.num(pr) + " €: netto " + Formato.euroSegno(Json.num(rec.get("netto_eur_stimato"), 0)));
                             Toast.makeText(this, "Vendita registrata: " + Formato.euroSegno(Json.num(rec.get("netto_eur_stimato"), 0)), Toast.LENGTH_LONG).show();
@@ -544,7 +585,7 @@ public class MainActivity extends Activity {
         return s;
     }
 
-    private void dialogoModifica(Map<String, Object> p) {
+    private void dialogoModifica(Map<String, Object> p, Archivio arch) {
         String tk = String.valueOf(p.get("titolo"));
         Double cambio = n.cambioPer(tk);
         double acq = Archivio.prezzoAcquistoEur(p, cambio);
@@ -565,7 +606,7 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Salva", (d, w) -> {
                     try {
                         String ta = azioni.getText().toString().trim();
-                        n.archivio.modifica(tk, Ui.numero(prezzo.getText().toString()), ta.isEmpty() ? null : Ui.numero(ta),
+                        arch.modifica(tk, Ui.numero(prezzo.getText().toString()), ta.isEmpty() ? null : Ui.numero(ta),
                                 leggiData(data.getText().toString()).toString(), (String) pattern.getSelectedItem(), cambio);
                     } catch (Exception e) {
                         Toast.makeText(this, "Non salvato: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -638,7 +679,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void schedaGuadagni() {
+    private void schedaGuadagni(Archivio arch, boolean virtuale) {
+        if (virtuale) contenuto.addView(Ui.testo(this, "🧪 Operazioni VIRTUALI (nessun soldo vero): aperte con il tasto Virtuale "
+                + "sugli avvisi e gestite in automatico. Servono a misurare come andrebbe il sistema.", 13, false, Ui.BLU));
         List<String> periodi = Arrays.asList("Tutto", "Settimana", "Mese", "Anno", "Personalizzato");
         Spinner sp = new Spinner(this);
         sp.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, periodi));
@@ -666,7 +709,7 @@ public class MainActivity extends Activity {
             contenuto.addView(r);
         }
         List<Map<String, Object>> ops = new ArrayList<>();
-        for (Map<String, Object> r : n.archivio.storico()) {
+        for (Map<String, Object> r : arch.storico()) {
             try {
                 LocalDate d = LocalDate.parse(String.valueOf(r.get("data_vendita")));
                 if ((i[0] == null || !d.isBefore(i[0])) && (i[1] == null || !d.isAfter(i[1]))) ops.add(r);
@@ -710,11 +753,11 @@ public class MainActivity extends Activity {
                     + q, 13, false, Ui.GRIGIO));
             s.addView(Ui.testo(this, Formato.num(acq) + " € → " + Formato.num(ven) + " € (" + Formato.pct(Json.num(r.get("rend_lordo_pct"), 0), 2)
                     + ") · " + Json.str(r.get("strategia"), ""), 13, false, Ui.TESTO));
-            s.setOnClickListener(v -> dialogoModificaOperazione(r));
+            s.setOnClickListener(v -> dialogoModificaOperazione(r, arch));
             s.setOnLongClickListener(v -> {
                 dialogo("Elimina operazione").setMessage("Eliminare dallo storico l'operazione su " + tk + "?\n"
                         + "Usalo solo per correggere un errore di inserimento.")
-                        .setPositiveButton("Elimina", (d, w) -> n.archivio.eliminaOperazione(String.valueOf(r.get("id"))))
+                        .setPositiveButton("Elimina", (d, w) -> arch.eliminaOperazione(String.valueOf(r.get("id"))))
                         .setNegativeButton("Annulla", null).show();
                 return true;
             });
@@ -724,7 +767,7 @@ public class MainActivity extends Activity {
                 + "Tocca un'operazione per correggerne prezzo o data di vendita; tieni premuto per eliminarla.", 12, false, Ui.GRIGIO));
     }
 
-    private void dialogoModificaOperazione(Map<String, Object> r) {
+    private void dialogoModificaOperazione(Map<String, Object> r, Archivio arch) {
         String tk = String.valueOf(r.get("titolo"));
         double acq = Json.num(r.get("prezzo_eur"), Json.num(r.get("prezzo"), Double.NaN));
         double ven = Json.num(r.get("prezzo_vendita_eur"), Json.num(r.get("prezzo_vendita"), Double.NaN));
@@ -744,7 +787,7 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Salva", (d, w) -> {
                     try {
                         String tq = azioniQ.getText().toString().trim();
-                        n.archivio.modificaOperazione(String.valueOf(r.get("id")), Ui.numero(prezzoV.getText().toString()),
+                        arch.modificaOperazione(String.valueOf(r.get("id")), Ui.numero(prezzoV.getText().toString()),
                                 leggiData(dataV.getText().toString()).toString(), Ui.numero(prezzoA.getText().toString()),
                                 tq.isEmpty() ? null : Ui.numero(tq));
                         n.log("Operazione " + tk + " corretta.");
