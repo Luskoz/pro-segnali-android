@@ -143,14 +143,22 @@ public class MainActivity extends Activity {
         }
     };
 
+    /** True mentre l'app e' in primo piano (il servizio resta acceso per aggiornare la schermata). */
+    static volatile boolean visibile;
+
     @Override
     protected void onResume() {
         super.onResume();
+        visibile = true;
+        if (n.servizioAttivo()) {
+            try { ServizioPro.avvia(this); } catch (Exception ignorata) { /* il sistema non lo consente ora */ }
+        }
         handler.post(aggiornaPeriodico);
     }
 
     @Override
     protected void onPause() {
+        visibile = false;
         handler.removeCallbacks(aggiornaPeriodico);
         super.onPause();
     }
@@ -1030,10 +1038,13 @@ public class MainActivity extends Activity {
         LinearLayout b = Ui.scheda(this);
         CheckBox serv = new CheckBox(this);
         serv.setText("Servizio attivo (sincronia e monitoraggio anche ad app chiusa)");
+        b.addView(Ui.testo(this, "Per risparmiare batteria il servizio resta acceso solo mentre questo telefono monitora "
+                + "e una borsa è aperta (da 20 minuti prima dell'apertura a 10 dopo la chiusura, giorni feriali). "
+                + "Negli altri momenti si spegne e ogni 15 minuti fa solo una sincronia veloce con il PC.", 12, false, Ui.GRIGIO));
         serv.setChecked(n.servizioAttivo());
         serv.setOnCheckedChangeListener((v, si) -> {
             n.setServizioAttivo(si);
-            if (si) ServizioPro.avvia(this); else ServizioPro.ferma(this);
+            if (si) ServizioPro.avvia(this); else { ServizioPro.ferma(this); Sveglia.annulla(this); }
         });
         b.addView(serv);
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);

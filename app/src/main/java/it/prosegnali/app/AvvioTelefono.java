@@ -9,7 +9,10 @@ public class AvvioTelefono extends BroadcastReceiver {
     @Override
     public void onReceive(Context c, Intent i) {
         if (Intent.ACTION_BOOT_COMPLETED.equals(i.getAction()) && Nucleo.get(c).servizioAttivo()) {
-            try { ServizioPro.avvia(c); } catch (Exception ignorata) { /* il sistema non lo consente ora */ }
+            Sveglia.programma(c);
+            if (Sveglia.serveAcceso(Nucleo.get(c))) {
+                try { ServizioPro.avvia(c); } catch (Exception ignorata) { /* il sistema non lo consente ora */ }
+            }
         }
     }
 }

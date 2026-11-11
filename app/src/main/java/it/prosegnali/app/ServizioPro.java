@@ -13,8 +13,8 @@ import java.util.Map;
 import it.prosegnali.motore.Mercati;
 
 /**
- * Servizio in primo piano: tiene viva la sincronia con il PC (ogni 30 secondi) e, quando il
- * monitoraggio e' assegnato al telefono, fa girare i monitor dei mercati e l'ascolto di Telegram.
+ * Servizio in primo piano: resta acceso solo quando serve (monitoraggio su questo telefono con una
+ * borsa aperta, oppure app aperta). Negli altri momenti si ferma e ci pensa la Sveglia.
  */
 public class ServizioPro extends Service {
     private volatile boolean attivo;
@@ -95,6 +95,16 @@ public class ServizioPro extends Service {
             } catch (Exception e) {
                 n.log("Errore del servizio: " + e.getMessage());
             }
+            // risparmio batteria: se il telefono non deve monitorare (o le borse sono chiuse) e l'app
+            // non e' aperta, mi fermo; una sveglia leggera fara' la sincronia e mi riaccendera'
+            if (!Sveglia.serveAcceso(n) && !MainActivity.visibile) {
+                n.log("Servizio in pausa: " + ("telefono".equals(n.monitorSu())
+                        ? "borse chiuse, riparto prima della prossima apertura." : "il monitoraggio non è su questo telefono."));
+                Sveglia.programma(this);
+                attivo = false;
+                stopSelf();
+                break;
+            }
             synchronized (sveglia) {
                 try { sveglia.wait(30_000); } catch (InterruptedException e) { break; }
             }
@@ -105,6 +115,7 @@ public class ServizioPro extends Service {
     @Override
     public void onDestroy() {
         attivo = false;
+        if (Nucleo.get(this).servizioAttivo()) Sveglia.programma(this);
         if (lavoro != null) lavoro.interrupt();
         Nucleo.get(this).fermaTutto();
         tieniSveglio(false);

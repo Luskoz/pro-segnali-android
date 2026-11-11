@@ -33,6 +33,10 @@
             android:foregroundServiceType="dataSync" />
 
         <receiver
+            android:name=".Sveglia"
+            android:exported="false" />
+
+        <receiver
             android:name=".AvvioTelefono"
             android:exported="true">
             <intent-filter>
