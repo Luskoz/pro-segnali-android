@@ -248,22 +248,30 @@ public final class Analisi {
     }
 
     // ---------------- punteggio 2: storico + volatilita' + distanza dai massimi + trimestrale
-    static final double[] MODELLO_P5 = {1.9062, 0.1999, 0.5007, -0.8193, 0.1848};
-    static final double[] MODELLO_P10 = {2.28, 0.687, 0.9928, -1.6832, 0.2752};
+    // volatilita' "robusta": media dei 14 giorni senza il giorno piu' estremo (novembre 2026)
+    static final double[] MODELLO_P5 = {1.9615, 0.2033, 0.5045, -0.8425, 0.1779};
+    static final double[] MODELLO_P10 = {2.4366, 0.6792, 1.0101, -1.6786, 0.2651};
+    public static final double QUOTA_SALTO = 0.25;
     public static final int GIORNI_TRIM = 42;
 
-    /** {atr, dmax} sull'ultima barra completa, null se i dati non bastano. */
+    /** {atr senza il giorno piu' estremo, dmax, quota del giorno estremo, indice del giorno, variazione
+     *  di quel giorno, data di quel giorno (epoch day)}; null se i dati non bastano. */
     public static double[] fattori(Serie s) {
         if (s == null || s.n < 253) return null;
         int n = s.n;
-        double somma = 0.0;
-        for (int i = n - 14; i < n; i++)
-            somma += Math.max(Math.max(s.h[i] - s.l[i], Math.abs(s.h[i] - s.c[i - 1])), Math.abs(s.l[i] - s.c[i - 1]));
+        double somma = 0.0, mx = -1.0;
+        int imx = -1;
+        for (int i = n - 14; i < n; i++) {
+            double tr = Math.max(Math.max(s.h[i] - s.l[i], Math.abs(s.h[i] - s.c[i - 1])), Math.abs(s.l[i] - s.c[i - 1]));
+            somma += tr;
+            if (tr > mx) { mx = tr; imx = i; }
+        }
         double massimo = Double.NEGATIVE_INFINITY;
         for (int i = n - 252; i < n; i++) if (!Double.isNaN(s.h[i])) massimo = Math.max(massimo, s.h[i]);
-        double atr = somma / 14 / s.c[n - 1];
-        if (Double.isNaN(atr) || massimo <= 0 || Double.isNaN(s.c[n - 1])) return null;
-        return new double[]{atr, s.c[n - 1] / massimo - 1};
+        double atr = (somma - mx) / 13 / s.c[n - 1];
+        if (Double.isNaN(atr) || massimo <= 0 || Double.isNaN(s.c[n - 1]) || somma <= 0) return null;
+        return new double[]{atr, s.c[n - 1] / massimo - 1, mx / somma, imx, s.c[imx] / s.c[imx - 1] - 1,
+                s.date[imx].toEpochDay()};
     }
 
     private static double logistica(double[] k, double storico, double atr, double dmax, double trim) {
@@ -331,6 +339,11 @@ public final class Analisi {
         if (fattori != null)
             b.append("\nVolatilità giornaliera media: ").append(Formato.num(fattori[0] * 100, 1))
                     .append("% · dal massimo a 52 settimane: ").append(Formato.pct(fattori[1] * 100, 1));
+        if (fattori != null && fattori.length > 5 && fattori[2] >= QUOTA_SALTO) {
+            String d = LocalDate.ofEpochDay((long) fattori[5]).toString();
+            b.append("\n⚠️ Il ").append(d, 8, 10).append('/').append(d, 5, 7).append(" c'è stato un movimento anomalo (")
+                    .append(Formato.pct(fattori[4] * 100, 1)).append("): escluso dal calcolo della volatilità.");
+        }
         if (gg != null && gg <= GIORNI_TRIM)
             b.append("\n📅 Trimestrale il ").append(dataTrim, 8, 10).append('/').append(dataTrim, 5, 7).append(" (")
                     .append(gg == 0 ? "oggi" : gg == 1 ? "domani" : "tra " + gg + " giorni")
