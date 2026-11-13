@@ -249,8 +249,12 @@ public final class Analisi {
 
     // ---------------- punteggio 2: storico + volatilita' + distanza dai massimi + trimestrale
     // volatilita' "robusta": media dei 14 giorni senza il giorno piu' estremo (novembre 2026)
-    static final double[] MODELLO_P5 = {1.9615, 0.2033, 0.5045, -0.8425, 0.1779};
-    static final double[] MODELLO_P10 = {2.4366, 0.6792, 1.0101, -1.6786, 0.2651};
+    // e volatilita' considerata al massimo fino al 4% (oltre non aumenta le probabilita')
+    static final double[] MODELLO_P5 = {2.2469, 0.1768, 0.5726, -0.7863, 0.1804};
+    static final double[] MODELLO_P10 = {2.9676, 0.6501, 1.141, -1.62, 0.2685};
+    public static final double VOL_TETTO = 0.04, VOL_ESTREMA = 0.05;
+    public static final int MASSIMO_ESTREMA = 59;
+    static final double P5_ESTREMA = 0.58, P10_ESTREMA = 0.44;
     public static final double QUOTA_SALTO = 0.25;
     public static final int GIORNI_TRIM = 42;
 
@@ -275,7 +279,7 @@ public final class Analisi {
     }
 
     private static double logistica(double[] k, double storico, double atr, double dmax, double trim) {
-        double z = k[0] + k[1] * storico / 100 + k[2] * Math.log(Math.min(Math.max(atr, 0.005), 0.15))
+        double z = k[0] + k[1] * storico / 100 + k[2] * Math.log(Math.min(Math.max(atr, 0.005), VOL_TETTO))
                 + k[3] * Math.min(Math.max(dmax, -0.5), 0.0) + k[4] * trim;
         return 1 / (1 + Math.exp(-z));
     }
@@ -289,7 +293,13 @@ public final class Analisi {
         double p5 = logistica(MODELLO_P5, storico, fattori[0], fattori[1], trim);
         double p10 = logistica(MODELLO_P10, storico, fattori[0], fattori[1], trim);
         double p = 0.5 * scala(p5, 0.45, 0.70) + 0.5 * scala(p10, 0.15, 0.50);
-        return new double[]{Math.floor(p * 100 + 0.5), p5, p10, storico};
+        double punti = Math.floor(p * 100 + 0.5);
+        if (fattori[0] > VOL_ESTREMA) {
+            punti = Math.min(punti, MASSIMO_ESTREMA);
+            p5 = Math.min(p5, P5_ESTREMA);
+            p10 = Math.min(p10, P10_ESTREMA);
+        }
+        return new double[]{punti, p5, p10, storico};
     }
 
     public static Integer giorniATrimestrale(String data, LocalDate oggi) {
@@ -339,6 +349,10 @@ public final class Analisi {
         if (fattori != null)
             b.append("\nVolatilità giornaliera media: ").append(Formato.num(fattori[0] * 100, 1))
                     .append("% · dal massimo a 52 settimane: ").append(Formato.pct(fattori[1] * 100, 1));
+        if (fattori != null && fattori[0] > VOL_ESTREMA)
+            b.append("\n⚠️ Volatilità estrema (").append(Formato.num(fattori[0] * 100, 1))
+                    .append("% al giorno): lo stop è dentro il movimento di un giorno normale. Punteggio limitato a ")
+                    .append(MASSIMO_ESTREMA).append('.');
         if (fattori != null && fattori.length > 5 && fattori[2] >= QUOTA_SALTO) {
             String d = LocalDate.ofEpochDay((long) fattori[5]).toString();
             b.append("\n⚠️ Il ").append(d, 8, 10).append('/').append(d, 5, 7).append(" c'è stato un movimento anomalo (")
